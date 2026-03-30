@@ -1,19 +1,23 @@
 'use client'
-import { Suspense, useState } from 'react'
-import { useRouter, useSearchParams } from 'next/navigation'
+import { useState, useEffect } from 'react'
+import { useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
 import toast from 'react-hot-toast'
 import Link from 'next/link'
 
-function RegisterForm() {
+export default function RegisterPage() {
   const [fullName, setFullName] = useState('')
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [loading, setLoading] = useState(false)
+  const [token, setToken] = useState<string | null>(null)
   const router = useRouter()
-  const searchParams = useSearchParams()
-  const token = searchParams.get('token')
   const supabase = createClient()
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search)
+    setToken(params.get('token'))
+  }, [])
 
   async function handleRegister(e: React.FormEvent) {
     e.preventDefault()
@@ -29,7 +33,7 @@ function RegisterForm() {
       if (token) {
         await supabase.rpc('accept_invitation', { p_token: token })
       }
-      toast.success('Registracija uspješna! Provjeri email za potvrdu.')
+      toast.success('Registracija uspješna! Provjeri email.')
       router.push('/login')
     }
     setLoading(false)
@@ -80,17 +84,5 @@ function RegisterForm() {
         </div>
       </div>
     </div>
-  )
-}
-
-export default function RegisterPage() {
-  return (
-    <Suspense fallback={
-      <div className="min-h-screen bg-forest-950 flex items-center justify-center">
-        <div className="text-white">Učitavam...</div>
-      </div>
-    }>
-      <RegisterForm />
-    </Suspense>
   )
 }
