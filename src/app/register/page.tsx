@@ -1,11 +1,11 @@
 'use client'
-import { useState } from 'react'
+import { Suspense, useState } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
 import toast from 'react-hot-toast'
 import Link from 'next/link'
 
-export default function RegisterPage() {
+function RegisterForm() {
   const [fullName, setFullName] = useState('')
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
@@ -39,6 +39,11 @@ export default function RegisterPage() {
     <div className="min-h-screen bg-forest-950 flex items-center justify-center p-4">
       <div className="w-full max-w-md">
         <div className="text-center mb-8">
+          <div className="w-16 h-16 bg-forest-600 rounded-2xl flex items-center justify-center mx-auto mb-4">
+            <svg className="w-9 h-9 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 3l14 9-14 9V3z" />
+            </svg>
+          </div>
           <h1 className="text-2xl font-bold text-white">LD Kuna Osekovo</h1>
           <p className="text-forest-300 mt-1">{token ? 'Prihvati pozivnicu' : 'Registracija'}</p>
         </div>
@@ -48,17 +53,20 @@ export default function RegisterPage() {
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">Ime i prezime</label>
               <input type="text" value={fullName} onChange={e => setFullName(e.target.value)} required
-                className="w-full px-4 py-3 border border-gray-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-forest-500" placeholder="Ivan Horvat" />
+                className="w-full px-4 py-3 border border-gray-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-forest-500"
+                placeholder="Ivan Horvat" />
             </div>
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">Email</label>
               <input type="email" value={email} onChange={e => setEmail(e.target.value)} required
-                className="w-full px-4 py-3 border border-gray-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-forest-500" placeholder="tvoj@email.com" />
+                className="w-full px-4 py-3 border border-gray-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-forest-500"
+                placeholder="tvoj@email.com" />
             </div>
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">Lozinka</label>
               <input type="password" value={password} onChange={e => setPassword(e.target.value)} required minLength={6}
-                className="w-full px-4 py-3 border border-gray-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-forest-500" placeholder="min. 6 znakova" />
+                className="w-full px-4 py-3 border border-gray-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-forest-500"
+                placeholder="min. 6 znakova" />
             </div>
             <button type="submit" disabled={loading}
               className="w-full bg-forest-600 hover:bg-forest-700 text-white font-medium py-3 rounded-xl transition-colors disabled:opacity-50">
@@ -72,5 +80,17 @@ export default function RegisterPage() {
         </div>
       </div>
     </div>
+  )
+}
+
+export default function RegisterPage() {
+  return (
+    <Suspense fallback={
+      <div className="min-h-screen bg-forest-950 flex items-center justify-center">
+        <div className="text-white">Učitavam...</div>
+      </div>
+    }>
+      <RegisterForm />
+    </Suspense>
   )
 }
