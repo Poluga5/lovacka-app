@@ -34,7 +34,6 @@ export default function KartaPage() {
   const mapContainer = useRef<HTMLDivElement>(null)
   const mapRef = useRef<any>(null)
   const tileLayerRef = useRef<any>(null)
-  const boundaryLayerRef = useRef<any>(null)
   const [pois, setPois] = useState<POI[]>([])
   const [selectedPOI, setSelectedPOI] = useState<POI | null>(null)
   const [mode, setMode] = useState<Mode>('view')
@@ -53,9 +52,15 @@ export default function KartaPage() {
   useEffect(() => {
     async function initMap() {
       if (!mapContainer.current) return
+
+      // Učitaj Leaflet CSS
+      const link = document.createElement('link')
+      link.rel = 'stylesheet'
+      link.href = 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.css'
+      document.head.appendChild(link)
+
       const L = (await import('leaflet')).default
 
-      // Fix Leaflet default icons
       delete (L.Icon.Default.prototype as any)._getIconUrl
       L.Icon.Default.mergeOptions({
         iconRetinaUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon-2x.png',
@@ -66,15 +71,13 @@ export default function KartaPage() {
       const map = L.map(mapContainer.current, {
         center: [45.568, 16.625],
         zoom: 11,
-        zoomControl: true,
       })
       mapRef.current = map
 
-      const tileLayer = L.tileLayer(TILE_LAYERS.karta.url, {
+      tileLayerRef.current = L.tileLayer(TILE_LAYERS.karta.url, {
         attribution: TILE_LAYERS.karta.attribution,
         maxZoom: 19,
       }).addTo(map)
-      tileLayerRef.current = tileLayer
 
       const { data: { user } } = await supabase.auth.getUser()
       if (!user) return
@@ -90,7 +93,6 @@ export default function KartaPage() {
 
       setPois(poisRes.data ?? [])
       setAreas(areasRes.data ?? [])
-
       poisRes.data?.forEach(poi => addPOIMarker(L, map, poi))
       areasRes.data?.forEach(area => drawArea(L, map, area))
 
@@ -102,20 +104,13 @@ export default function KartaPage() {
           setClickedCoords(coords)
         } else if (currentMode === 'draw_boundary') {
           const latLng: [number, number] = [e.latlng.lat, e.latlng.lng]
-          
-          // Add temp marker
           const marker = L.circleMarker(latLng, {
             radius: 5, color: '#EC4899', fillColor: '#EC4899', fillOpacity: 1, weight: 2
           }).addTo(map)
           tempMarkersRef.current.push(marker)
-
           boundaryPointsRef.current = [...boundaryPointsRef.current, coords]
           setBoundaryPoints([...boundaryPointsRef.current])
-
-          // Update preview polygon
-          if (previewPolyRef.current) {
-            map.removeLayer(previewPolyRef.current)
-          }
+          if (previewPolyRef.current) map.removeLayer(previewPolyRef.current)
           if (boundaryPointsRef.current.length >= 3) {
             const latLngs = boundaryPointsRef.current.map(p => [p[1], p[0]] as [number, number])
             previewPolyRef.current = L.polygon(latLngs, {
@@ -130,22 +125,19 @@ export default function KartaPage() {
     return () => { mapRef.current?.remove() }
   }, [])
 
-  // Switch tile layer
   useEffect(() => {
     if (!mapRef.current || !tileLayerRef.current) return
-    const loadLeaflet = async () => {
+    async function switchLayer() {
       const L = (await import('leaflet')).default
       mapRef.current.removeLayer(tileLayerRef.current)
-      const newLayer = L.tileLayer(TILE_LAYERS[mapStyle].url, {
+      tileLayerRef.current = L.tileLayer(TILE_LAYERS[mapStyle].url, {
         attribution: TILE_LAYERS[mapStyle].attribution,
         maxZoom: 19,
       }).addTo(mapRef.current)
-      tileLayerRef.current = newLayer
     }
-    loadLeaflet()
+    switchLayer()
   }, [mapStyle])
 
-  // Sync mode to ref
   useEffect(() => {
     modeRef.current = mode
     if (mapRef.current) {
@@ -156,44 +148,31 @@ export default function KartaPage() {
   function addPOIMarker(L: any, map: any, poi: POI) {
     const icon = L.divIcon({
       html: `<div style="background:${POI_COLORS[poi.type]};width:32px;height:32px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:16px;border:2px solid white;box-shadow:0 2px 8px rgba(0,0,0,0.3);cursor:pointer;">${POI_ICONS[poi.type]}</div>`,
-      iconSize: [32, 32],
-      iconAnchor: [16, 16],
-      className: ''
+      iconSize: [32, 32], iconAnchor: [16, 16], className: ''
     })
     const coords = poi.geom?.coordinates ?? [16.625, 45.568]
-    const marker = L.marker([coords[1], coords[0]], { icon })
-      .addTo(map)
-      .on('click', (e: any) => {
-        e.originalEvent.stopPropagation()
-        setSelectedPOI(poi)
-      })
-    return marker
+    L.marker([coords[1], coords[0]], { icon }).addTo(map)
+      .on('click', (e: any) => { e.originalEvent.stopPropagation(); setSelectedPOI(poi) })
   }
 
   function drawArea(L: any, map: any, area: any) {
     try {
       const coords = area.geom?.coordinates?.[0] ?? area.geom?.[0]
       if (!coords) return
-      const latLngs = coords.map((p: number[]) => [p[1], p[0]])
-      L.polygon(latLngs, {
-        color: '#16A34A', weight: 2.5,
-        fillColor: '#22C55E', fillOpacity: 0.1
+      L.polygon(coords.map((p: number[]) => [p[1], p[0]]), {
+        color: '#16A34A', weight: 2.5, fillColor: '#22C55E', fillOpacity: 0.1
       }).addTo(map)
-    } catch (e) { console.error('Area draw error', e) }
+    } catch (e) { console.error(e) }
   }
 
   async function saveBoundary() {
-    if (boundaryPointsRef.current.length < 3 || !groupId) {
-      toast.error('Min. 3 točke!')
-      return
-    }
+    if (boundaryPointsRef.current.length < 3 || !groupId) { toast.error('Min. 3 točke!'); return }
     const { data: { user } } = await supabase.auth.getUser()
     if (!user) return
     const closed = [...boundaryPointsRef.current, boundaryPointsRef.current[0]]
     const wkt = `POLYGON((${closed.map(p => `${p[0]} ${p[1]}`).join(',')}))`
     const { data, error } = await supabase.from('areas').insert({
-      group_id: groupId, name: 'Granica lovišta',
-      geom: wkt, created_by: user.id,
+      group_id: groupId, name: 'Granica lovišta', geom: wkt, created_by: user.id,
     }).select().single()
     if (error) { toast.error('Greška pri spremanju'); return }
     toast.success('Granica lovišta spremljena!')
@@ -233,22 +212,18 @@ export default function KartaPage() {
     setClickedCoords(null)
     tempMarkersRef.current.forEach(m => mapRef.current?.removeLayer(m))
     tempMarkersRef.current = []
-    if (previewPolyRef.current) {
-      mapRef.current?.removeLayer(previewPolyRef.current)
-      previewPolyRef.current = null
-    }
+    if (previewPolyRef.current) { mapRef.current?.removeLayer(previewPolyRef.current); previewPolyRef.current = null }
   }
 
   return (
     <div className="h-full flex flex-col">
-      <div className="bg-white border-b border-gray-200 px-4 py-2 flex items-center gap-2 flex-wrap z-10">
+      <div className="bg-white border-b border-gray-200 px-4 py-2 flex items-center gap-2 flex-wrap" style={{ zIndex: 1000, position: 'relative' }}>
         <h1 className="font-semibold text-gray-800 mr-2">Karta lovišta</h1>
 
-        {/* Stil karte */}
         <div className="flex rounded-lg border border-gray-200 overflow-hidden text-xs">
           {(Object.keys(TILE_LAYERS) as (keyof typeof TILE_LAYERS)[]).map(s => (
             <button key={s} onClick={() => setMapStyle(s)}
-              className={`px-3 py-1.5 capitalize transition-colors ${mapStyle === s ? 'bg-forest-600 text-white' : 'hover:bg-gray-50 text-gray-600'}`}>
+              className={`px-3 py-1.5 transition-colors ${mapStyle === s ? 'bg-forest-600 text-white' : 'hover:bg-gray-50 text-gray-600'}`}>
               {s === 'karta' ? '🗺 Karta' : s === 'satelit' ? '🛰 Satelit' : '⛰ Teren'}
             </button>
           ))}
@@ -275,8 +250,7 @@ export default function KartaPage() {
                   Klikaj rubove lovišta · {boundaryPoints.length} točaka
                 </span>
                 {boundaryPoints.length >= 3 && (
-                  <button onClick={saveBoundary}
-                    className="px-3 py-1.5 bg-green-600 text-white rounded-lg text-xs font-medium">
+                  <button onClick={saveBoundary} className="px-3 py-1.5 bg-green-600 text-white rounded-lg text-xs font-medium">
                     ✓ Zatvori i spremi
                   </button>
                 )}
@@ -287,8 +261,7 @@ export default function KartaPage() {
                 Klikni na kartu za lokaciju
               </span>
             )}
-            <button onClick={cancelMode}
-              className="px-3 py-1.5 border border-gray-200 hover:bg-gray-50 text-gray-600 rounded-lg text-xs">
+            <button onClick={cancelMode} className="px-3 py-1.5 border border-gray-200 hover:bg-gray-50 text-gray-600 rounded-lg text-xs">
               Odustani
             </button>
           </div>
@@ -298,9 +271,8 @@ export default function KartaPage() {
       </div>
 
       <div className="flex-1 relative">
-        <div ref={mapContainer} className="absolute inset-0" style={{ zIndex: 0 }} />
+        <div ref={mapContainer} className="absolute inset-0" />
 
-        {/* Legenda */}
         <div className="absolute top-4 left-4 bg-white/95 rounded-xl shadow-md p-3 text-xs space-y-1" style={{ zIndex: 1000 }}>
           {Object.entries(POI_ICONS).map(([t, icon]) => (
             <div key={t} className="flex items-center gap-2">
@@ -313,7 +285,6 @@ export default function KartaPage() {
           </div>
         </div>
 
-        {/* Add POI panel */}
         {mode === 'add_poi' && clickedCoords && (
           <div className="absolute top-4 right-4 bg-white rounded-2xl shadow-xl p-5 w-72" style={{ zIndex: 1000 }}>
             <div className="flex justify-between mb-4">
@@ -327,7 +298,7 @@ export default function KartaPage() {
               <div className="grid grid-cols-4 gap-1">
                 {Object.entries(POI_ICONS).map(([t, icon]) => (
                   <button key={t} onClick={() => setNewPOI(p => ({...p, type: t}))}
-                    className={`py-1.5 rounded-lg text-center border text-xs transition-colors ${newPOI.type === t ? 'bg-forest-600 text-white border-forest-600' : 'border-gray-200 hover:border-forest-300'}`}>
+                    className={`py-1.5 rounded-lg text-center border text-xs transition-colors ${newPOI.type === t ? 'bg-forest-600 text-white border-forest-600' : 'border-gray-200'}`}>
                     <span className="block text-base">{icon}</span>{t}
                   </button>
                 ))}
@@ -336,15 +307,13 @@ export default function KartaPage() {
                 className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-forest-500"
                 rows={2} placeholder="Opis (opcionalno)" />
               <p className="text-xs text-gray-400">📍 {clickedCoords[1].toFixed(5)}, {clickedCoords[0].toFixed(5)}</p>
-              <button onClick={savePOI}
-                className="w-full bg-forest-600 hover:bg-forest-700 text-white font-medium py-2 rounded-lg text-sm">
+              <button onClick={savePOI} className="w-full bg-forest-600 hover:bg-forest-700 text-white font-medium py-2 rounded-lg text-sm">
                 Spremi
               </button>
             </div>
           </div>
         )}
 
-        {/* Selected POI */}
         {selectedPOI && (
           <div className="absolute bottom-4 left-4 right-4 md:right-auto md:w-72 bg-white rounded-2xl shadow-xl p-5" style={{ zIndex: 1000 }}>
             <div className="flex justify-between items-start">
