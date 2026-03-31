@@ -15,21 +15,6 @@ const POI_COLORS: Record<string, string> = {
 
 type Mode = 'view' | 'draw_boundary' | 'add_poi'
 
-const TILE_LAYERS = {
-  karta: {
-    url: 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
-    attribution: '© OpenStreetMap contributors'
-  },
-  satelit: {
-    url: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
-    attribution: '© Esri, Maxar, Earthstar Geographics'
-  },
-  teren: {
-    url: 'https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png',
-    attribution: '© OpenTopoMap contributors'
-  }
-}
-
 export default function KartaPage() {
   const mapContainer = useRef<HTMLDivElement>(null)
   const mapRef = useRef<any>(null)
@@ -41,7 +26,7 @@ export default function KartaPage() {
   const [clickedCoords, setClickedCoords] = useState<[number, number] | null>(null)
   const [newPOI, setNewPOI] = useState({ name: '', type: 'ceka', description: '' })
   const [groupId, setGroupId] = useState<string | null>(null)
-  const [mapStyle, setMapStyle] = useState<keyof typeof TILE_LAYERS>('karta')
+  const [mapStyle, setMapStyle] = useState('karta')
   const [areas, setAreas] = useState<any[]>([])
   const modeRef = useRef<Mode>('view')
   const boundaryPointsRef = useRef<[number, number][]>([])
@@ -49,40 +34,35 @@ export default function KartaPage() {
   const tempMarkersRef = useRef<any[]>([])
   const supabase = createClient()
 
-  useEffect(() => {
-    async function initMap() {
-      if (!mapContainer.current) return
+  const TILES: Record<string, {url: string, attr: string}> = {
+    karta: { url: 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', attr: '© OpenStreetMap' },
+    satelit: { url: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', attr: '© Esri' },
+    teren: { url: 'https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png', attr: '© OpenTopoMap' },
+  }
 
-      // Učitaj Leaflet CSS
+  useEffect(() => {
+    if (!document.getElementById('leaflet-css')) {
       const link = document.createElement('link')
+      link.id = 'leaflet-css'
       link.rel = 'stylesheet'
       link.href = 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.css'
       document.head.appendChild(link)
+    }
 
+    async function initMap() {
+      await new Promise(r => setTimeout(r, 500))
+      if (!mapContainer.current || mapRef.current) return
       const L = (await import('leaflet')).default
-
       delete (L.Icon.Default.prototype as any)._getIconUrl
-      L.Icon.Default.mergeOptions({
-        iconRetinaUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon-2x.png',
-        iconUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon.png',
-        shadowUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-shadow.png',
-      })
 
-      const map = L.map(mapContainer.current, {
-        center: [45.568, 16.625],
-        zoom: 11,
-      })
+      const map = L.map(mapContainer.current, { center: [45.568, 16.625], zoom: 11 })
       mapRef.current = map
 
-      tileLayerRef.current = L.tileLayer(TILE_LAYERS.karta.url, {
-        attribution: TILE_LAYERS.karta.attribution,
-        maxZoom: 19,
-      }).addTo(map)
+      tileLayerRef.current = L.tileLayer(TILES.karta.url, { attribution: TILES.karta.attr, maxZoom: 19 }).addTo(map)
 
       const { data: { user } } = await supabase.auth.getUser()
       if (!user) return
-      const { data: member } = await supabase
-        .from('group_members').select('group_id').eq('user_id', user.id).single()
+      const { data: member } = await supabase.from('group_members').select('group_id').eq('user_id', user.id).single()
       if (!member) return
       setGroupId(member.group_id)
 
@@ -90,7 +70,6 @@ export default function KartaPage() {
         supabase.from('poi').select('*').eq('group_id', member.group_id).eq('is_active', true),
         supabase.from('areas').select('*').eq('group_id', member.group_id),
       ])
-
       setPois(poisRes.data ?? [])
       setAreas(areasRes.data ?? [])
       poisRes.data?.forEach(poi => addPOIMarker(L, map, poi))
@@ -98,61 +77,52 @@ export default function KartaPage() {
 
       map.on('click', (e: any) => {
         const coords: [number, number] = [e.latlng.lng, e.latlng.lat]
-        const currentMode = modeRef.current
-
-        if (currentMode === 'add_poi') {
+        if (modeRef.current === 'add_poi') {
           setClickedCoords(coords)
-        } else if (currentMode === 'draw_boundary') {
-          const latLng: [number, number] = [e.latlng.lat, e.latlng.lng]
-          const marker = L.circleMarker(latLng, {
-            radius: 5, color: '#EC4899', fillColor: '#EC4899', fillOpacity: 1, weight: 2
-          }).addTo(map)
-          tempMarkersRef.current.push(marker)
+        } else if (modeRef.current === 'draw_boundary') {
+          const ll: [number, number] = [e.latlng.lat, e.latlng.lng]
+          tempMarkersRef.current.push(
+            L.circleMarker(ll, { radius: 5, color: '#EC4899', fillColor: '#EC4899', fillOpacity: 1 }).addTo(map)
+          )
           boundaryPointsRef.current = [...boundaryPointsRef.current, coords]
           setBoundaryPoints([...boundaryPointsRef.current])
           if (previewPolyRef.current) map.removeLayer(previewPolyRef.current)
           if (boundaryPointsRef.current.length >= 3) {
-            const latLngs = boundaryPointsRef.current.map(p => [p[1], p[0]] as [number, number])
-            previewPolyRef.current = L.polygon(latLngs, {
-              color: '#EC4899', weight: 2, dashArray: '6,4',
-              fillColor: '#22C55E', fillOpacity: 0.1
-            }).addTo(map)
+            previewPolyRef.current = L.polygon(
+              boundaryPointsRef.current.map(p => [p[1], p[0]] as [number,number]),
+              { color: '#EC4899', weight: 2, dashArray: '6,4', fillColor: '#22C55E', fillOpacity: 0.1 }
+            ).addTo(map)
           }
         }
       })
     }
     initMap()
-    return () => { mapRef.current?.remove() }
+    return () => { if (mapRef.current) { mapRef.current.remove(); mapRef.current = null } }
   }, [])
 
   useEffect(() => {
     if (!mapRef.current || !tileLayerRef.current) return
-    async function switchLayer() {
+    async function sw() {
       const L = (await import('leaflet')).default
       mapRef.current.removeLayer(tileLayerRef.current)
-      tileLayerRef.current = L.tileLayer(TILE_LAYERS[mapStyle].url, {
-        attribution: TILE_LAYERS[mapStyle].attribution,
-        maxZoom: 19,
-      }).addTo(mapRef.current)
+      tileLayerRef.current = L.tileLayer(TILES[mapStyle].url, { attribution: TILES[mapStyle].attr, maxZoom: 19 }).addTo(mapRef.current)
     }
-    switchLayer()
+    sw()
   }, [mapStyle])
 
   useEffect(() => {
     modeRef.current = mode
-    if (mapRef.current) {
-      mapRef.current.getContainer().style.cursor = mode !== 'view' ? 'crosshair' : ''
-    }
+    if (mapRef.current) mapRef.current.getContainer().style.cursor = mode !== 'view' ? 'crosshair' : ''
   }, [mode])
 
   function addPOIMarker(L: any, map: any, poi: POI) {
     const icon = L.divIcon({
-      html: `<div style="background:${POI_COLORS[poi.type]};width:32px;height:32px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:16px;border:2px solid white;box-shadow:0 2px 8px rgba(0,0,0,0.3);cursor:pointer;">${POI_ICONS[poi.type]}</div>`,
+      html: `<div style="background:${POI_COLORS[poi.type]};width:32px;height:32px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:16px;border:2px solid white;box-shadow:0 2px 8px rgba(0,0,0,0.3);">${POI_ICONS[poi.type]}</div>`,
       iconSize: [32, 32], iconAnchor: [16, 16], className: ''
     })
-    const coords = poi.geom?.coordinates ?? [16.625, 45.568]
-    L.marker([coords[1], coords[0]], { icon }).addTo(map)
-      .on('click', (e: any) => { e.originalEvent.stopPropagation(); setSelectedPOI(poi) })
+    const c = poi.geom?.coordinates ?? [16.625, 45.568]
+    L.marker([c[1], c[0]], { icon }).addTo(map)
+      .on('click', (e: any) => { e.originalEvent?.stopPropagation(); setSelectedPOI(poi) })
   }
 
   function drawArea(L: any, map: any, area: any) {
@@ -162,7 +132,7 @@ export default function KartaPage() {
       L.polygon(coords.map((p: number[]) => [p[1], p[0]]), {
         color: '#16A34A', weight: 2.5, fillColor: '#22C55E', fillOpacity: 0.1
       }).addTo(map)
-    } catch (e) { console.error(e) }
+    } catch (e) {}
   }
 
   async function saveBoundary() {
@@ -170,17 +140,18 @@ export default function KartaPage() {
     const { data: { user } } = await supabase.auth.getUser()
     if (!user) return
     const closed = [...boundaryPointsRef.current, boundaryPointsRef.current[0]]
-    const wkt = `POLYGON((${closed.map(p => `${p[0]} ${p[1]}`).join(',')}))`
     const { data, error } = await supabase.from('areas').insert({
-      group_id: groupId, name: 'Granica lovišta', geom: wkt, created_by: user.id,
+      group_id: groupId, name: 'Granica lovišta',
+      geom: `POLYGON((${closed.map(p => `${p[0]} ${p[1]}`).join(',')}))`,
+      created_by: user.id,
     }).select().single()
-    if (error) { toast.error('Greška pri spremanju'); return }
-    toast.success('Granica lovišta spremljena!')
+    if (error) { toast.error('Greška'); return }
+    toast.success('Granica spremljena!')
     cancelMode()
     if (mapRef.current && data) {
       const L = (await import('leaflet')).default
-      setAreas(prev => [...prev, data])
-      drawArea(L, mapRef.current, { ...data, geom: { coordinates: [closed] } })
+      setAreas(a => [...a, data])
+      drawArea(L, mapRef.current, { geom: { coordinates: [closed] } })
     }
   }
 
@@ -199,136 +170,90 @@ export default function KartaPage() {
     setPois(p => [...p, data])
     setClickedCoords(null)
     setNewPOI({ name: '', type: 'ceka', description: '' })
-    if (mapRef.current) {
-      const L = (await import('leaflet')).default
-      addPOIMarker(L, mapRef.current, data)
-    }
+    if (mapRef.current) { const L = (await import('leaflet')).default; addPOIMarker(L, mapRef.current, data) }
   }
 
   function cancelMode() {
-    setMode('view')
-    setBoundaryPoints([])
-    boundaryPointsRef.current = []
-    setClickedCoords(null)
-    tempMarkersRef.current.forEach(m => mapRef.current?.removeLayer(m))
-    tempMarkersRef.current = []
+    setMode('view'); setBoundaryPoints([]); boundaryPointsRef.current = []; setClickedCoords(null)
+    tempMarkersRef.current.forEach(m => mapRef.current?.removeLayer(m)); tempMarkersRef.current = []
     if (previewPolyRef.current) { mapRef.current?.removeLayer(previewPolyRef.current); previewPolyRef.current = null }
   }
 
   return (
-    <div className="h-full flex flex-col">
-      <div className="bg-white border-b border-gray-200 px-4 py-2 flex items-center gap-2 flex-wrap" style={{ zIndex: 1000, position: 'relative' }}>
-        <h1 className="font-semibold text-gray-800 mr-2">Karta lovišta</h1>
-
-        <div className="flex rounded-lg border border-gray-200 overflow-hidden text-xs">
-          {(Object.keys(TILE_LAYERS) as (keyof typeof TILE_LAYERS)[]).map(s => (
-            <button key={s} onClick={() => setMapStyle(s)}
-              className={`px-3 py-1.5 transition-colors ${mapStyle === s ? 'bg-forest-600 text-white' : 'hover:bg-gray-50 text-gray-600'}`}>
+    <div style={{ display: 'flex', flexDirection: 'column', height: 'calc(100vh - 60px)' }}>
+      <div style={{ background: 'white', borderBottom: '1px solid #e5e7eb', padding: '8px 16px', display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap', flexShrink: 0, zIndex: 1000 }}>
+        <span style={{ fontWeight: 600, fontSize: 14, marginRight: 8 }}>Karta lovišta</span>
+        <div style={{ display: 'flex', border: '1px solid #e5e7eb', borderRadius: 8, overflow: 'hidden', fontSize: 12 }}>
+          {Object.keys(TILES).map(s => (
+            <button key={s} onClick={() => setMapStyle(s)} style={{ padding: '6px 12px', background: mapStyle === s ? '#247a4b' : 'white', color: mapStyle === s ? 'white' : '#4b5563', border: 'none', cursor: 'pointer' }}>
               {s === 'karta' ? '🗺 Karta' : s === 'satelit' ? '🛰 Satelit' : '⛰ Teren'}
             </button>
           ))}
         </div>
-
-        <div className="w-px h-5 bg-gray-200" />
-
         {mode === 'view' ? (
           <>
-            <button onClick={() => setMode('draw_boundary')}
-              className="px-3 py-1.5 bg-green-600 hover:bg-green-700 text-white rounded-lg text-xs font-medium">
-              ✏️ Crtaj granicu
-            </button>
-            <button onClick={() => setMode('add_poi')}
-              className="px-3 py-1.5 bg-forest-600 hover:bg-forest-700 text-white rounded-lg text-xs font-medium">
-              + Dodaj čeku/POI
-            </button>
+            <button onClick={() => setMode('draw_boundary')} style={{ padding: '6px 12px', background: '#16a34a', color: 'white', border: 'none', borderRadius: 8, fontSize: 12, cursor: 'pointer' }}>✏️ Crtaj granicu</button>
+            <button onClick={() => setMode('add_poi')} style={{ padding: '6px 12px', background: '#247a4b', color: 'white', border: 'none', borderRadius: 8, fontSize: 12, cursor: 'pointer' }}>+ Dodaj čeku/POI</button>
           </>
         ) : (
-          <div className="flex items-center gap-2">
-            {mode === 'draw_boundary' && (
-              <>
-                <span className="text-xs bg-green-50 text-green-700 px-3 py-1.5 rounded-lg border border-green-200">
-                  Klikaj rubove lovišta · {boundaryPoints.length} točaka
-                </span>
-                {boundaryPoints.length >= 3 && (
-                  <button onClick={saveBoundary} className="px-3 py-1.5 bg-green-600 text-white rounded-lg text-xs font-medium">
-                    ✓ Zatvori i spremi
-                  </button>
-                )}
-              </>
-            )}
-            {mode === 'add_poi' && (
-              <span className="text-xs bg-blue-50 text-blue-700 px-3 py-1.5 rounded-lg border border-blue-200">
-                Klikni na kartu za lokaciju
-              </span>
-            )}
-            <button onClick={cancelMode} className="px-3 py-1.5 border border-gray-200 hover:bg-gray-50 text-gray-600 rounded-lg text-xs">
-              Odustani
-            </button>
-          </div>
+          <>
+            {mode === 'draw_boundary' && <span style={{ fontSize: 12, background: '#f0fdf4', color: '#15803d', padding: '6px 12px', borderRadius: 8, border: '1px solid #bbf7d0' }}>Klikaj rubove · {boundaryPoints.length} točaka</span>}
+            {boundaryPoints.length >= 3 && <button onClick={saveBoundary} style={{ padding: '6px 12px', background: '#16a34a', color: 'white', border: 'none', borderRadius: 8, fontSize: 12, cursor: 'pointer' }}>✓ Spremi</button>}
+            {mode === 'add_poi' && <span style={{ fontSize: 12, background: '#eff6ff', color: '#1d4ed8', padding: '6px 12px', borderRadius: 8 }}>Klikni na kartu</span>}
+            <button onClick={cancelMode} style={{ padding: '6px 12px', background: 'white', color: '#374151', border: '1px solid #e5e7eb', borderRadius: 8, fontSize: 12, cursor: 'pointer' }}>Odustani</button>
+          </>
         )}
-
-        <div className="ml-auto text-xs text-gray-400">{pois.length} POI · {areas.length} granica</div>
+        <span style={{ marginLeft: 'auto', fontSize: 12, color: '#9ca3af' }}>{pois.length} POI · {areas.length} granica</span>
       </div>
 
-      <div className="flex-1 relative">
-        <div ref={mapContainer} className="absolute inset-0" />
+      <div style={{ position: 'relative', flex: 1 }}>
+        <div ref={mapContainer} style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0 }} />
 
-        <div className="absolute top-4 left-4 bg-white/95 rounded-xl shadow-md p-3 text-xs space-y-1" style={{ zIndex: 1000 }}>
+        <div style={{ position: 'absolute', top: 16, left: 16, background: 'rgba(255,255,255,0.95)', borderRadius: 12, padding: 12, fontSize: 12, zIndex: 1000, boxShadow: '0 2px 8px rgba(0,0,0,0.1)' }}>
           {Object.entries(POI_ICONS).map(([t, icon]) => (
-            <div key={t} className="flex items-center gap-2">
-              <span>{icon}</span><span className="text-gray-600 capitalize">{t}</span>
+            <div key={t} style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 2 }}>
+              <span>{icon}</span><span style={{ color: '#4b5563' }}>{t}</span>
             </div>
           ))}
-          <div className="border-t pt-1 mt-1 flex items-center gap-2">
-            <span className="w-4 h-0.5 bg-green-600 inline-block rounded" />
-            <span className="text-gray-600">Granica</span>
-          </div>
         </div>
 
         {mode === 'add_poi' && clickedCoords && (
-          <div className="absolute top-4 right-4 bg-white rounded-2xl shadow-xl p-5 w-72" style={{ zIndex: 1000 }}>
-            <div className="flex justify-between mb-4">
-              <h3 className="font-semibold text-gray-800">Novi POI</h3>
-              <button onClick={() => setClickedCoords(null)} className="text-gray-400">✕</button>
+          <div style={{ position: 'absolute', top: 16, right: 16, background: 'white', borderRadius: 16, padding: 20, width: 280, zIndex: 1000, boxShadow: '0 4px 20px rgba(0,0,0,0.15)' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 16 }}>
+              <span style={{ fontWeight: 600 }}>Novi POI</span>
+              <button onClick={() => setClickedCoords(null)} style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: 16 }}>✕</button>
             </div>
-            <div className="space-y-3">
-              <input value={newPOI.name} onChange={e => setNewPOI(p => ({...p, name: e.target.value}))}
-                className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-forest-500"
-                placeholder="Naziv čeke..." autoFocus />
-              <div className="grid grid-cols-4 gap-1">
-                {Object.entries(POI_ICONS).map(([t, icon]) => (
-                  <button key={t} onClick={() => setNewPOI(p => ({...p, type: t}))}
-                    className={`py-1.5 rounded-lg text-center border text-xs transition-colors ${newPOI.type === t ? 'bg-forest-600 text-white border-forest-600' : 'border-gray-200'}`}>
-                    <span className="block text-base">{icon}</span>{t}
-                  </button>
-                ))}
-              </div>
-              <textarea value={newPOI.description} onChange={e => setNewPOI(p => ({...p, description: e.target.value}))}
-                className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-forest-500"
-                rows={2} placeholder="Opis (opcionalno)" />
-              <p className="text-xs text-gray-400">📍 {clickedCoords[1].toFixed(5)}, {clickedCoords[0].toFixed(5)}</p>
-              <button onClick={savePOI} className="w-full bg-forest-600 hover:bg-forest-700 text-white font-medium py-2 rounded-lg text-sm">
-                Spremi
-              </button>
+            <input value={newPOI.name} onChange={e => setNewPOI(p => ({...p, name: e.target.value}))}
+              style={{ width: '100%', border: '1px solid #e5e7eb', borderRadius: 8, padding: '8px 12px', fontSize: 14, marginBottom: 10, boxSizing: 'border-box' }}
+              placeholder="Naziv čeke..." autoFocus />
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 4, marginBottom: 10 }}>
+              {Object.entries(POI_ICONS).map(([t, icon]) => (
+                <button key={t} onClick={() => setNewPOI(p => ({...p, type: t}))}
+                  style={{ padding: '6px 2px', borderRadius: 8, border: newPOI.type === t ? '2px solid #247a4b' : '1px solid #e5e7eb', background: newPOI.type === t ? '#247a4b' : 'white', color: newPOI.type === t ? 'white' : '#374151', cursor: 'pointer', fontSize: 11, textAlign: 'center' }}>
+                  <div style={{ fontSize: 18 }}>{icon}</div>{t}
+                </button>
+              ))}
             </div>
+            <textarea value={newPOI.description} onChange={e => setNewPOI(p => ({...p, description: e.target.value}))}
+              style={{ width: '100%', border: '1px solid #e5e7eb', borderRadius: 8, padding: '8px 12px', fontSize: 14, marginBottom: 8, boxSizing: 'border-box', resize: 'none' }}
+              rows={2} placeholder="Opis..." />
+            <button onClick={savePOI} style={{ width: '100%', background: '#247a4b', color: 'white', border: 'none', borderRadius: 8, padding: 10, fontSize: 14, cursor: 'pointer', fontWeight: 500 }}>Spremi</button>
           </div>
         )}
 
         {selectedPOI && (
-          <div className="absolute bottom-4 left-4 right-4 md:right-auto md:w-72 bg-white rounded-2xl shadow-xl p-5" style={{ zIndex: 1000 }}>
-            <div className="flex justify-between items-start">
-              <div className="flex items-center gap-3">
-                <span className="text-2xl">{POI_ICONS[selectedPOI.type]}</span>
+          <div style={{ position: 'absolute', bottom: 16, left: 16, background: 'white', borderRadius: 16, padding: 20, minWidth: 250, zIndex: 1000, boxShadow: '0 4px 20px rgba(0,0,0,0.15)' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                <span style={{ fontSize: 28 }}>{POI_ICONS[selectedPOI.type]}</span>
                 <div>
-                  <h3 className="font-semibold text-gray-800">{selectedPOI.name}</h3>
-                  <span className="text-xs px-2 py-0.5 rounded-full text-white" style={{ background: POI_COLORS[selectedPOI.type] }}>
-                    {selectedPOI.type}
-                  </span>
+                  <div style={{ fontWeight: 600, fontSize: 15 }}>{selectedPOI.name}</div>
+                  <span style={{ fontSize: 11, background: POI_COLORS[selectedPOI.type], color: 'white', padding: '2px 8px', borderRadius: 20 }}>{selectedPOI.type}</span>
                 </div>
               </div>
-              <button onClick={() => setSelectedPOI(null)} className="text-gray-400">✕</button>
+              <button onClick={() => setSelectedPOI(null)} style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: 16 }}>✕</button>
             </div>
-            {selectedPOI.description && <p className="text-sm text-gray-600 mt-3">{selectedPOI.description}</p>}
+            {selectedPOI.description && <p style={{ fontSize: 13, color: '#4b5563', marginTop: 10 }}>{selectedPOI.description}</p>}
           </div>
         )}
       </div>
