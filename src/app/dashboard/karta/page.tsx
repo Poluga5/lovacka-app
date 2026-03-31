@@ -68,12 +68,12 @@ export default function KartaPage() {
 
       const [poisRes, areasRes] = await Promise.all([
         supabase.from('poi').select('*').eq('group_id', member.group_id).eq('is_active', true),
-        supabase.from('areas').select('*').eq('group_id', member.group_id),
+        supabase.rpc('get_areas_geojson', { p_group_id: member.group_id }),
       ])
       setPois(poisRes.data ?? [])
       setAreas(areasRes.data ?? [])
       poisRes.data?.forEach(poi => addPOIMarker(L, map, poi))
-      areasRes.data?.forEach(area => drawArea(L, map, area))
+      areasRes.data?.forEach((area: any) => drawArea(L, map, area))
 
       map.on('click', (e: any) => {
         const coords: [number, number] = [e.latlng.lng, e.latlng.lat]
@@ -127,12 +127,13 @@ export default function KartaPage() {
 
   function drawArea(L: any, map: any, area: any) {
     try {
-      const coords = area.geom?.coordinates?.[0] ?? area.geom?.[0]
-      if (!coords) return
-      L.polygon(coords.map((p: number[]) => [p[1], p[0]]), {
+      const geo = typeof area.geojson === 'string' ? JSON.parse(area.geojson) : area.geojson
+      if (!geo?.coordinates) return
+      const coords = geo.coordinates[0].map((p: number[]) => [p[1], p[0]])
+      L.polygon(coords, {
         color: '#16A34A', weight: 2.5, fillColor: '#22C55E', fillOpacity: 0.1
       }).addTo(map)
-    } catch (e) {}
+    } catch (e) { console.error(e) }
   }
 
   async function saveBoundary() {
@@ -148,11 +149,6 @@ export default function KartaPage() {
     if (error) { toast.error('Greška'); return }
     toast.success('Granica spremljena!')
     cancelMode()
-    if (mapRef.current && data) {
-      const L = (await import('leaflet')).default
-      setAreas(a => [...a, data])
-      drawArea(L, mapRef.current, { geom: { coordinates: [closed] } })
-    }
   }
 
   async function savePOI() {
