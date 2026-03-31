@@ -2,12 +2,6 @@
 @tailwind components;
 @tailwind utilities;
 
-@import 'maplibre-gl/dist/maplibre-gl.css';
-
-:root {
-  --forest: #247a4b;
-}
-
 * { box-sizing: border-box; }
 
 body {
@@ -15,4 +9,5 @@ body {
   background: #f8f9fa;
 }
 
-.maplibregl-map { border-radius: 0.5rem; }
+.maplibregl-map { border-radius: 0; }
+.maplibregl-canvas { outline: none; }
