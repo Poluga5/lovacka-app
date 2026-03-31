@@ -70,6 +70,11 @@ export default function KartaPage() {
         supabase.from('poi').select('*').eq('group_id', member.group_id).eq('is_active', true),
         supabase.from('areas').select('id, name, geojson_cache').eq('group_id', member.group_id),
       ])
+
+      console.log('AREAS DATA:', JSON.stringify(areasRes.data))
+      console.log('AREAS ERROR:', JSON.stringify(areasRes.error))
+      console.log('GROUP ID:', member.group_id)
+
       setPois(poisRes.data ?? [])
       setAreas(areasRes.data ?? [])
       poisRes.data?.forEach(poi => addPOIMarker(L, map, poi))
@@ -263,5 +268,3 @@ export default function KartaPage() {
     </div>
   )
 }
-
-// v3
