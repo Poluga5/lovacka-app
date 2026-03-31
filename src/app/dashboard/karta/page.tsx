@@ -15,10 +15,26 @@ const POI_COLORS: Record<string, string> = {
 
 type Mode = 'view' | 'draw_boundary' | 'add_poi'
 
+const TILE_LAYERS = {
+  karta: {
+    url: 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
+    attribution: '© OpenStreetMap contributors'
+  },
+  satelit: {
+    url: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+    attribution: '© Esri, Maxar, Earthstar Geographics'
+  },
+  teren: {
+    url: 'https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png',
+    attribution: '© OpenTopoMap contributors'
+  }
+}
+
 export default function KartaPage() {
   const mapContainer = useRef<HTMLDivElement>(null)
   const mapRef = useRef<any>(null)
-  const markersRef = useRef<any[]>([])
+  const tileLayerRef = useRef<any>(null)
+  const boundaryLayerRef = useRef<any>(null)
   const [pois, setPois] = useState<POI[]>([])
   const [selectedPOI, setSelectedPOI] = useState<POI | null>(null)
   const [mode, setMode] = useState<Mode>('view')
@@ -26,16 +42,42 @@ export default function KartaPage() {
   const [clickedCoords, setClickedCoords] = useState<[number, number] | null>(null)
   const [newPOI, setNewPOI] = useState({ name: '', type: 'ceka', description: '' })
   const [groupId, setGroupId] = useState<string | null>(null)
+  const [mapStyle, setMapStyle] = useState<keyof typeof TILE_LAYERS>('karta')
   const [areas, setAreas] = useState<any[]>([])
-  const [mapLoaded, setMapLoaded] = useState(false)
+  const modeRef = useRef<Mode>('view')
+  const boundaryPointsRef = useRef<[number, number][]>([])
+  const previewPolyRef = useRef<any>(null)
+  const tempMarkersRef = useRef<any[]>([])
   const supabase = createClient()
 
   useEffect(() => {
     async function initMap() {
-      const maplibre = await import('maplibre-gl')
-      const { data: { user } } = await supabase.auth.getUser()
-      if (!user || !mapContainer.current) return
+      if (!mapContainer.current) return
+      const L = (await import('leaflet')).default
 
+      // Fix Leaflet default icons
+      delete (L.Icon.Default.prototype as any)._getIconUrl
+      L.Icon.Default.mergeOptions({
+        iconRetinaUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon-2x.png',
+        iconUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon.png',
+        shadowUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-shadow.png',
+      })
+
+      const map = L.map(mapContainer.current, {
+        center: [45.568, 16.625],
+        zoom: 11,
+        zoomControl: true,
+      })
+      mapRef.current = map
+
+      const tileLayer = L.tileLayer(TILE_LAYERS.karta.url, {
+        attribution: TILE_LAYERS.karta.attribution,
+        maxZoom: 19,
+      }).addTo(map)
+      tileLayerRef.current = tileLayer
+
+      const { data: { user } } = await supabase.auth.getUser()
+      if (!user) return
       const { data: member } = await supabase
         .from('group_members').select('group_id').eq('user_id', user.id).single()
       if (!member) return
@@ -45,125 +87,122 @@ export default function KartaPage() {
         supabase.from('poi').select('*').eq('group_id', member.group_id).eq('is_active', true),
         supabase.from('areas').select('*').eq('group_id', member.group_id),
       ])
+
       setPois(poisRes.data ?? [])
       setAreas(areasRes.data ?? [])
 
-      const map = new maplibre.default.Map({
-        container: mapContainer.current,
-        style: {
-          version: 8,
-          sources: {
-            osm: {
-              type: 'raster',
-              tiles: ['https://tile.openstreetmap.org/{z}/{x}/{y}.png'],
-              tileSize: 256,
-              attribution: '© OpenStreetMap contributors',
-              maxzoom: 19,
-            }
-          },
-          layers: [{ id: 'osm', type: 'raster', source: 'osm' }]
-        },
-        center: [16.625, 45.568],
-        zoom: 11,
-      })
-      mapRef.current = map
+      poisRes.data?.forEach(poi => addPOIMarker(L, map, poi))
+      areasRes.data?.forEach(area => drawArea(L, map, area))
 
-      map.on('load', () => {
-        setMapLoaded(true)
-        poisRes.data?.forEach(poi => addMarker(map, maplibre.default, poi))
-        areasRes.data?.forEach(area => drawArea(map, area))
+      map.on('click', (e: any) => {
+        const coords: [number, number] = [e.latlng.lng, e.latlng.lat]
+        const currentMode = modeRef.current
+
+        if (currentMode === 'add_poi') {
+          setClickedCoords(coords)
+        } else if (currentMode === 'draw_boundary') {
+          const latLng: [number, number] = [e.latlng.lat, e.latlng.lng]
+          
+          // Add temp marker
+          const marker = L.circleMarker(latLng, {
+            radius: 5, color: '#EC4899', fillColor: '#EC4899', fillOpacity: 1, weight: 2
+          }).addTo(map)
+          tempMarkersRef.current.push(marker)
+
+          boundaryPointsRef.current = [...boundaryPointsRef.current, coords]
+          setBoundaryPoints([...boundaryPointsRef.current])
+
+          // Update preview polygon
+          if (previewPolyRef.current) {
+            map.removeLayer(previewPolyRef.current)
+          }
+          if (boundaryPointsRef.current.length >= 3) {
+            const latLngs = boundaryPointsRef.current.map(p => [p[1], p[0]] as [number, number])
+            previewPolyRef.current = L.polygon(latLngs, {
+              color: '#EC4899', weight: 2, dashArray: '6,4',
+              fillColor: '#22C55E', fillOpacity: 0.1
+            }).addTo(map)
+          }
+        }
       })
     }
     initMap()
-    return () => mapRef.current?.remove()
+    return () => { mapRef.current?.remove() }
   }, [])
 
+  // Switch tile layer
   useEffect(() => {
-    const map = mapRef.current
-    if (!map || !mapLoaded) return
+    if (!mapRef.current || !tileLayerRef.current) return
+    const loadLeaflet = async () => {
+      const L = (await import('leaflet')).default
+      mapRef.current.removeLayer(tileLayerRef.current)
+      const newLayer = L.tileLayer(TILE_LAYERS[mapStyle].url, {
+        attribution: TILE_LAYERS[mapStyle].attribution,
+        maxZoom: 19,
+      }).addTo(mapRef.current)
+      tileLayerRef.current = newLayer
+    }
+    loadLeaflet()
+  }, [mapStyle])
 
-    const handler = (e: any) => {
-      const coords: [number, number] = [e.lngLat.lng, e.lngLat.lat]
-      if (mode === 'add_poi') {
-        setClickedCoords(coords)
-      } else if (mode === 'draw_boundary') {
-        setBoundaryPoints(prev => {
-          const pts = [...prev, coords]
-          updatePreview(map, pts)
-          return pts
-        })
-      }
+  // Sync mode to ref
+  useEffect(() => {
+    modeRef.current = mode
+    if (mapRef.current) {
+      mapRef.current.getContainer().style.cursor = mode !== 'view' ? 'crosshair' : ''
     }
+  }, [mode])
 
-    if (mode !== 'view') {
-      map.on('click', handler)
-      map.getCanvas().style.cursor = 'crosshair'
-    } else {
-      map.getCanvas().style.cursor = ''
-    }
-    return () => map.off('click', handler)
-  }, [mode, mapLoaded])
-
-  function updatePreview(map: any, points: [number, number][]) {
-    const geojson = {
-      type: 'Feature' as const,
-      geometry: {
-        type: points.length >= 3 ? 'Polygon' : 'LineString',
-        coordinates: points.length >= 3 ? [[...points, points[0]]] : points
-      }
-    }
-    if (map.getSource('preview')) {
-      ;(map.getSource('preview') as any).setData(geojson)
-    } else {
-      map.addSource('preview', { type: 'geojson', data: geojson })
-      map.addLayer({ id: 'preview-fill', type: 'fill', source: 'preview', paint: { 'fill-color': '#22C55E', 'fill-opacity': 0.15 } })
-      map.addLayer({ id: 'preview-line', type: 'line', source: 'preview', paint: { 'line-color': '#EC4899', 'line-width': 2.5, 'line-dasharray': [3, 2] } })
-    }
-    markersRef.current.forEach(m => m.remove())
-    markersRef.current = []
-    points.forEach(p => {
-      const el = document.createElement('div')
-      el.style.cssText = 'width:10px;height:10px;background:#EC4899;border-radius:50%;border:2px solid white;box-shadow:0 1px 4px rgba(0,0,0,0.3);'
-      const { default: ml } = require('maplibre-gl')
-      markersRef.current.push(new ml.Marker({ element: el }).setLngLat(p).addTo(map))
+  function addPOIMarker(L: any, map: any, poi: POI) {
+    const icon = L.divIcon({
+      html: `<div style="background:${POI_COLORS[poi.type]};width:32px;height:32px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:16px;border:2px solid white;box-shadow:0 2px 8px rgba(0,0,0,0.3);cursor:pointer;">${POI_ICONS[poi.type]}</div>`,
+      iconSize: [32, 32],
+      iconAnchor: [16, 16],
+      className: ''
     })
-  }
-
-  function drawArea(map: any, area: any) {
-    const id = `area-${area.id}`
-    if (map.getSource(id)) return
-    const coords = area.geom?.coordinates ?? area.geom
-    if (!coords) return
-    map.addSource(id, { type: 'geojson', data: { type: 'Feature', geometry: { type: 'Polygon', coordinates: coords } } })
-    map.addLayer({ id: `${id}-fill`, type: 'fill', source: id, paint: { 'fill-color': '#22C55E', 'fill-opacity': 0.12 } })
-    map.addLayer({ id: `${id}-line`, type: 'line', source: id, paint: { 'line-color': '#16A34A', 'line-width': 2.5 } })
-  }
-
-  function addMarker(map: any, maplibre: any, poi: POI) {
-    const el = document.createElement('div')
-    el.style.cssText = `background:${POI_COLORS[poi.type]};border-radius:50%;width:32px;height:32px;
-      display:flex;align-items:center;justify-content:center;font-size:14px;
-      border:2px solid white;box-shadow:0 2px 8px rgba(0,0,0,0.3);cursor:pointer;`
-    el.textContent = POI_ICONS[poi.type]
-    el.onclick = (e) => { e.stopPropagation(); setSelectedPOI(poi) }
     const coords = poi.geom?.coordinates ?? [16.625, 45.568]
-    new maplibre.Marker({ element: el }).setLngLat(coords).addTo(map)
+    const marker = L.marker([coords[1], coords[0]], { icon })
+      .addTo(map)
+      .on('click', (e: any) => {
+        e.originalEvent.stopPropagation()
+        setSelectedPOI(poi)
+      })
+    return marker
+  }
+
+  function drawArea(L: any, map: any, area: any) {
+    try {
+      const coords = area.geom?.coordinates?.[0] ?? area.geom?.[0]
+      if (!coords) return
+      const latLngs = coords.map((p: number[]) => [p[1], p[0]])
+      L.polygon(latLngs, {
+        color: '#16A34A', weight: 2.5,
+        fillColor: '#22C55E', fillOpacity: 0.1
+      }).addTo(map)
+    } catch (e) { console.error('Area draw error', e) }
   }
 
   async function saveBoundary() {
-    if (boundaryPoints.length < 3 || !groupId) { toast.error('Min. 3 točke!'); return }
+    if (boundaryPointsRef.current.length < 3 || !groupId) {
+      toast.error('Min. 3 točke!')
+      return
+    }
     const { data: { user } } = await supabase.auth.getUser()
     if (!user) return
-    const closed = [...boundaryPoints, boundaryPoints[0]]
+    const closed = [...boundaryPointsRef.current, boundaryPointsRef.current[0]]
     const wkt = `POLYGON((${closed.map(p => `${p[0]} ${p[1]}`).join(',')}))`
     const { data, error } = await supabase.from('areas').insert({
-      group_id: groupId, name: 'III/108 Popovača',
+      group_id: groupId, name: 'Granica lovišta',
       geom: wkt, created_by: user.id,
     }).select().single()
-    if (error) { toast.error('Greška'); return }
-    toast.success('Granica spremljena!')
+    if (error) { toast.error('Greška pri spremanju'); return }
+    toast.success('Granica lovišta spremljena!')
     cancelMode()
-    if (mapRef.current && data) drawArea(mapRef.current, { ...data, geom: { coordinates: [closed] } })
+    if (mapRef.current && data) {
+      const L = (await import('leaflet')).default
+      setAreas(prev => [...prev, data])
+      drawArea(L, mapRef.current, { ...data, geom: { coordinates: [closed] } })
+    }
   }
 
   async function savePOI() {
@@ -177,41 +216,54 @@ export default function KartaPage() {
       created_by: user.id,
     }).select().single()
     if (error) { toast.error('Greška'); return }
-    toast.success('POI dodan!')
+    toast.success(`${newPOI.name} dodano!`)
     setPois(p => [...p, data])
     setClickedCoords(null)
     setNewPOI({ name: '', type: 'ceka', description: '' })
     if (mapRef.current) {
-      const ml = await import('maplibre-gl')
-      addMarker(mapRef.current, ml.default, data)
+      const L = (await import('leaflet')).default
+      addPOIMarker(L, mapRef.current, data)
     }
   }
 
   function cancelMode() {
     setMode('view')
     setBoundaryPoints([])
+    boundaryPointsRef.current = []
     setClickedCoords(null)
-    markersRef.current.forEach(m => m.remove())
-    markersRef.current = []
-    const map = mapRef.current
-    if (!map) return
-    if (map.getLayer('preview-fill')) map.removeLayer('preview-fill')
-    if (map.getLayer('preview-line')) map.removeLayer('preview-line')
-    if (map.getSource('preview')) map.removeSource('preview')
+    tempMarkersRef.current.forEach(m => mapRef.current?.removeLayer(m))
+    tempMarkersRef.current = []
+    if (previewPolyRef.current) {
+      mapRef.current?.removeLayer(previewPolyRef.current)
+      previewPolyRef.current = null
+    }
   }
 
   return (
     <div className="h-full flex flex-col">
-      <div className="bg-white border-b border-gray-200 px-4 py-2 flex items-center gap-2 flex-wrap">
+      <div className="bg-white border-b border-gray-200 px-4 py-2 flex items-center gap-2 flex-wrap z-10">
         <h1 className="font-semibold text-gray-800 mr-2">Karta lovišta</h1>
+
+        {/* Stil karte */}
+        <div className="flex rounded-lg border border-gray-200 overflow-hidden text-xs">
+          {(Object.keys(TILE_LAYERS) as (keyof typeof TILE_LAYERS)[]).map(s => (
+            <button key={s} onClick={() => setMapStyle(s)}
+              className={`px-3 py-1.5 capitalize transition-colors ${mapStyle === s ? 'bg-forest-600 text-white' : 'hover:bg-gray-50 text-gray-600'}`}>
+              {s === 'karta' ? '🗺 Karta' : s === 'satelit' ? '🛰 Satelit' : '⛰ Teren'}
+            </button>
+          ))}
+        </div>
+
+        <div className="w-px h-5 bg-gray-200" />
+
         {mode === 'view' ? (
           <>
             <button onClick={() => setMode('draw_boundary')}
-              className="flex items-center gap-1.5 px-3 py-1.5 bg-green-600 hover:bg-green-700 text-white rounded-lg text-xs font-medium">
+              className="px-3 py-1.5 bg-green-600 hover:bg-green-700 text-white rounded-lg text-xs font-medium">
               ✏️ Crtaj granicu
             </button>
             <button onClick={() => setMode('add_poi')}
-              className="flex items-center gap-1.5 px-3 py-1.5 bg-forest-600 hover:bg-forest-700 text-white rounded-lg text-xs font-medium">
+              className="px-3 py-1.5 bg-forest-600 hover:bg-forest-700 text-white rounded-lg text-xs font-medium">
               + Dodaj čeku/POI
             </button>
           </>
@@ -241,19 +293,15 @@ export default function KartaPage() {
             </button>
           </div>
         )}
+
         <div className="ml-auto text-xs text-gray-400">{pois.length} POI · {areas.length} granica</div>
       </div>
 
       <div className="flex-1 relative">
-        <div ref={mapContainer} className="absolute inset-0" />
+        <div ref={mapContainer} className="absolute inset-0" style={{ zIndex: 0 }} />
 
-        {!mapLoaded && (
-          <div className="absolute inset-0 bg-gray-100 flex items-center justify-center">
-            <div className="text-gray-500">Učitavam kartu...</div>
-          </div>
-        )}
-
-        <div className="absolute top-4 left-4 bg-white/95 rounded-xl shadow-md p-3 text-xs space-y-1">
+        {/* Legenda */}
+        <div className="absolute top-4 left-4 bg-white/95 rounded-xl shadow-md p-3 text-xs space-y-1" style={{ zIndex: 1000 }}>
           {Object.entries(POI_ICONS).map(([t, icon]) => (
             <div key={t} className="flex items-center gap-2">
               <span>{icon}</span><span className="text-gray-600 capitalize">{t}</span>
@@ -265,8 +313,9 @@ export default function KartaPage() {
           </div>
         </div>
 
+        {/* Add POI panel */}
         {mode === 'add_poi' && clickedCoords && (
-          <div className="absolute top-4 right-4 bg-white rounded-2xl shadow-xl p-5 w-72 z-10">
+          <div className="absolute top-4 right-4 bg-white rounded-2xl shadow-xl p-5 w-72" style={{ zIndex: 1000 }}>
             <div className="flex justify-between mb-4">
               <h3 className="font-semibold text-gray-800">Novi POI</h3>
               <button onClick={() => setClickedCoords(null)} className="text-gray-400">✕</button>
@@ -278,7 +327,7 @@ export default function KartaPage() {
               <div className="grid grid-cols-4 gap-1">
                 {Object.entries(POI_ICONS).map(([t, icon]) => (
                   <button key={t} onClick={() => setNewPOI(p => ({...p, type: t}))}
-                    className={`py-1.5 rounded-lg text-center border text-xs transition-colors ${newPOI.type === t ? 'bg-forest-600 text-white border-forest-600' : 'border-gray-200'}`}>
+                    className={`py-1.5 rounded-lg text-center border text-xs transition-colors ${newPOI.type === t ? 'bg-forest-600 text-white border-forest-600' : 'border-gray-200 hover:border-forest-300'}`}>
                     <span className="block text-base">{icon}</span>{t}
                   </button>
                 ))}
@@ -286,6 +335,7 @@ export default function KartaPage() {
               <textarea value={newPOI.description} onChange={e => setNewPOI(p => ({...p, description: e.target.value}))}
                 className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-forest-500"
                 rows={2} placeholder="Opis (opcionalno)" />
+              <p className="text-xs text-gray-400">📍 {clickedCoords[1].toFixed(5)}, {clickedCoords[0].toFixed(5)}</p>
               <button onClick={savePOI}
                 className="w-full bg-forest-600 hover:bg-forest-700 text-white font-medium py-2 rounded-lg text-sm">
                 Spremi
@@ -294,8 +344,9 @@ export default function KartaPage() {
           </div>
         )}
 
+        {/* Selected POI */}
         {selectedPOI && (
-          <div className="absolute bottom-4 left-4 right-4 md:right-auto md:w-72 bg-white rounded-2xl shadow-xl p-5 z-10">
+          <div className="absolute bottom-4 left-4 right-4 md:right-auto md:w-72 bg-white rounded-2xl shadow-xl p-5" style={{ zIndex: 1000 }}>
             <div className="flex justify-between items-start">
               <div className="flex items-center gap-3">
                 <span className="text-2xl">{POI_ICONS[selectedPOI.type]}</span>
