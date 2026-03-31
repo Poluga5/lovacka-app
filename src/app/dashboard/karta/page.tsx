@@ -68,7 +68,7 @@ export default function KartaPage() {
 
       const [poisRes, areasRes] = await Promise.all([
         supabase.from('poi').select('*').eq('group_id', member.group_id).eq('is_active', true),
-        supabase.rpc('get_areas_geojson', { p_group_id: member.group_id }),
+        supabase.from('areas').select('id, name, geojson_cache').eq('group_id', member.group_id),
       ])
       setPois(poisRes.data ?? [])
       setAreas(areasRes.data ?? [])
@@ -127,13 +127,13 @@ export default function KartaPage() {
 
   function drawArea(L: any, map: any, area: any) {
     try {
-      const geo = typeof area.geojson === 'string' ? JSON.parse(area.geojson) : area.geojson
+      const geo = typeof area.geojson_cache === 'string' ? JSON.parse(area.geojson_cache) : area.geojson_cache
       if (!geo?.coordinates) return
       const coords = geo.coordinates[0].map((p: number[]) => [p[1], p[0]])
       L.polygon(coords, {
-        color: '#16A34A', weight: 2.5, fillColor: '#22C55E', fillOpacity: 0.1
+        color: '#EC0000', weight: 3, fillColor: '#22C55E', fillOpacity: 0.1
       }).addTo(map)
-    } catch (e) { console.error(e) }
+    } catch (e) { console.error('drawArea error:', e) }
   }
 
   async function saveBoundary() {
@@ -141,14 +141,17 @@ export default function KartaPage() {
     const { data: { user } } = await supabase.auth.getUser()
     if (!user) return
     const closed = [...boundaryPointsRef.current, boundaryPointsRef.current[0]]
-    const { data, error } = await supabase.from('areas').insert({
+    const geojson = JSON.stringify({ type: 'Polygon', coordinates: [closed] })
+    const { error } = await supabase.from('areas').insert({
       group_id: groupId, name: 'Granica lovišta',
       geom: `POLYGON((${closed.map(p => `${p[0]} ${p[1]}`).join(',')}))`,
+      geojson_cache: geojson,
       created_by: user.id,
-    }).select().single()
+    })
     if (error) { toast.error('Greška'); return }
     toast.success('Granica spremljena!')
     cancelMode()
+    window.location.reload()
   }
 
   async function savePOI() {
@@ -211,6 +214,10 @@ export default function KartaPage() {
               <span>{icon}</span><span style={{ color: '#4b5563' }}>{t}</span>
             </div>
           ))}
+          <div style={{ borderTop: '1px solid #e5e7eb', marginTop: 4, paddingTop: 4, display: 'flex', alignItems: 'center', gap: 6 }}>
+            <span style={{ width: 16, height: 3, background: '#EC0000', display: 'inline-block' }} />
+            <span style={{ color: '#4b5563' }}>Granica</span>
+          </div>
         </div>
 
         {mode === 'add_poi' && clickedCoords && (
