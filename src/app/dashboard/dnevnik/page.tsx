@@ -27,6 +27,13 @@ const TYPES: { key: EntryType, icon: string, label: string, color: string }[] = 
   { key: 'ostalo', icon: '📝', label: 'Ostalo', color: '#6B7280' },
 ]
 
+const timeOptions: string[] = []
+for (let h = 0; h < 24; h++) {
+  for (let m = 0; m < 60; m += 30) {
+    timeOptions.push(`${h.toString().padStart(2,'0')}:${m.toString().padStart(2,'0')}`)
+  }
+}
+
 export default function DnevnikPage() {
   const [entries, setEntries] = useState<any[]>([])
   const [pois, setPois] = useState<any[]>([])
@@ -38,17 +45,16 @@ export default function DnevnikPage() {
   const [filterType, setFilterType] = useState('')
   const [expandedId, setExpandedId] = useState<string | null>(null)
   const [entryType, setEntryType] = useState<EntryType>('odstrjel')
-
   const [form, setForm] = useState({
     species: '', quantity: 1, spol: 'Nepoznato', starost: 'Odraslo',
     nacin_lova: 'Čeka', oruzje: '', municija: '',
     masa_trupla: '', trofej_duzina: '', trofej_masa: '', trofej_cic: '',
     temperatura: '', vjetar: 'Bez vjetra', vidljivost: 'Odlična',
     poi_id: '', notes: '',
-    hunted_at: new Date().toISOString().slice(0, 16),
+    datum: new Date().toISOString().slice(0, 10),
+    vrijeme: `${new Date().getHours().toString().padStart(2,'0')}:${Math.round(new Date().getMinutes()/30)*30 === 60 ? '00' : (Math.round(new Date().getMinutes()/30)*30).toString().padStart(2,'0')}`,
     sudionici: [] as string[],
   })
-
   const supabase = createClient()
 
   useEffect(() => { load() }, [])
@@ -60,7 +66,6 @@ export default function DnevnikPage() {
     const { data: member } = await supabase.from('group_members').select('group_id').eq('user_id', user.id).single()
     if (!member) return
     setGroupId(member.group_id)
-
     const [entriesRes, poisRes, lovciRes] = await Promise.all([
       supabase.from('entries').select('*, profiles(full_name), poi(name)')
         .eq('group_id', member.group_id).order('hunted_at', { ascending: false }),
@@ -73,12 +78,16 @@ export default function DnevnikPage() {
   }
 
   function resetForm() {
+    const now = new Date()
+    const mins = Math.round(now.getMinutes() / 30) * 30
     setForm({
       species: '', quantity: 1, spol: 'Nepoznato', starost: 'Odraslo',
       nacin_lova: 'Čeka', oruzje: '', municija: '',
       masa_trupla: '', trofej_duzina: '', trofej_masa: '', trofej_cic: '',
       temperatura: '', vjetar: 'Bez vjetra', vidljivost: 'Odlična',
-      poi_id: '', notes: '', hunted_at: new Date().toISOString().slice(0, 16),
+      poi_id: '', notes: '',
+      datum: now.toISOString().slice(0, 10),
+      vrijeme: `${now.getHours().toString().padStart(2,'0')}:${mins === 60 ? '00' : mins.toString().padStart(2,'0')}`,
       sudionici: [],
     })
     setEntryType('odstrjel')
@@ -90,14 +99,13 @@ export default function DnevnikPage() {
       return
     }
     if (!groupId || !userId) return
-
+    const hunted_at = new Date(`${form.datum}T${form.vrijeme}:00`).toISOString()
     const { error } = await supabase.from('entries').insert({
       group_id: groupId, user_id: userId,
       type: entryType,
       species: form.species || '-',
       quantity: form.quantity,
-      spol: form.spol,
-      starost: form.starost,
+      spol: form.spol, starost: form.starost,
       nacin_lova: form.nacin_lova,
       oruzje: form.oruzje || null,
       municija: form.municija || null,
@@ -106,11 +114,10 @@ export default function DnevnikPage() {
       trofej_masa: form.trofej_masa ? parseFloat(form.trofej_masa) : null,
       trofej_cic: form.trofej_cic ? parseFloat(form.trofej_cic) : null,
       temperatura: form.temperatura ? parseFloat(form.temperatura) : null,
-      vjetar: form.vjetar,
-      vidljivost: form.vidljivost,
+      vjetar: form.vjetar, vidljivost: form.vidljivost,
       poi_id: form.poi_id || null,
       notes: form.notes || null,
-      hunted_at: new Date(form.hunted_at).toISOString(),
+      hunted_at,
       sudionici: form.sudionici,
     })
     if (error) { toast.error('Greška pri unosu'); console.error(error); return }
@@ -121,13 +128,15 @@ export default function DnevnikPage() {
   }
 
   async function exportCSV() {
-    const headers = ['Datum', 'Tip', 'Vrsta', 'Količina', 'Spol', 'Starost', 'Način lova',
-      'Lokacija', 'Oružje', 'Municija', 'Masa (kg)', 'Trofej dužina', 'Trofej masa', 'CIC',
-      'Temp (°C)', 'Vjetar', 'Vidljivost', 'Lovac', 'Bilješka']
+    const headers = ['Datum', 'Vrijeme', 'Tip', 'Vrsta', 'Količina', 'Spol', 'Starost',
+      'Način lova', 'Lokacija', 'Oružje', 'Municija', 'Masa (kg)',
+      'Trofej dužina', 'Trofej masa', 'CIC', 'Temp (°C)', 'Vjetar', 'Vidljivost', 'Lovac', 'Bilješka']
     const rows = entries.map(e => [
-      format(new Date(e.hunted_at), 'dd.MM.yyyy HH:mm'),
-      e.type, e.species, e.quantity, e.spol ?? '', e.starost ?? '', e.nacin_lova ?? '',
-      (e.poi as any)?.name ?? '', e.oruzje ?? '', e.municija ?? '',
+      format(new Date(e.hunted_at), 'dd.MM.yyyy'),
+      format(new Date(e.hunted_at), 'HH:mm'),
+      e.type, e.species, e.quantity, e.spol ?? '', e.starost ?? '',
+      e.nacin_lova ?? '', (e.poi as any)?.name ?? '',
+      e.oruzje ?? '', e.municija ?? '',
       e.masa_trupla ?? '', e.trofej_duzina ?? '', e.trofej_masa ?? '', e.trofej_cic ?? '',
       e.temperatura ?? '', e.vjetar ?? '', e.vidljivost ?? '',
       (e.profiles as any)?.full_name ?? '', e.notes ?? ''
@@ -136,26 +145,43 @@ export default function DnevnikPage() {
     const blob = new Blob(['\uFEFF' + csv], { type: 'text/csv;charset=utf-8;' })
     const a = document.createElement('a')
     a.href = URL.createObjectURL(blob)
-    a.download = `dnevnik-${format(new Date(), 'yyyy-MM-dd')}.csv`
+    a.download = `dnevnik-${format(new Date(), 'dd-MM-yyyy')}.csv`
     a.click()
     toast.success('CSV preuzet!')
   }
 
   const showTrofej = TROFEJNE_VRSTE.some(v => form.species.startsWith(v)) && entryType === 'odstrjel'
   const filtered = entries.filter(e =>
-    (!filter || e.species?.toLowerCase().includes(filter.toLowerCase()) || (e.profiles as any)?.full_name?.toLowerCase().includes(filter.toLowerCase())) &&
+    (!filter || e.species?.toLowerCase().includes(filter.toLowerCase()) ||
+      (e.profiles as any)?.full_name?.toLowerCase().includes(filter.toLowerCase())) &&
     (!filterType || e.type === filterType)
   )
-
-  const statsByType = TYPES.reduce((acc, t) => {
-    acc[t.key] = entries.filter(e => e.type === t.key).length
-    return acc
-  }, {} as Record<string, number>)
-
   const totalOdstrjel = entries.filter(e => e.type === 'odstrjel').reduce((a, e) => a + (e.quantity || 0), 0)
 
   const inputCls = "w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-forest-500"
   const labelCls = "text-sm font-medium text-gray-700 mb-1 block"
+
+  const DateTimeFields = () => (
+    <div>
+      <label className={labelCls}>Datum i vrijeme</label>
+      <div className="grid grid-cols-2 gap-3">
+        <div>
+          <label className="text-xs text-gray-500 mb-1 block">Datum</label>
+          <input type="date" value={form.datum}
+            onChange={e => setForm(f => ({...f, datum: e.target.value}))}
+            className={inputCls} />
+        </div>
+        <div>
+          <label className="text-xs text-gray-500 mb-1 block">Vrijeme</label>
+          <select value={form.vrijeme}
+            onChange={e => setForm(f => ({...f, vrijeme: e.target.value}))}
+            className={inputCls}>
+            {timeOptions.map(t => <option key={t} value={t}>{t}</option>)}
+          </select>
+        </div>
+      </div>
+    </div>
+  )
 
   return (
     <div className="p-6 max-w-4xl mx-auto">
@@ -178,11 +204,11 @@ export default function DnevnikPage() {
           <p className="text-sm text-red-600">Odstrjeljeno</p>
         </div>
         <div className="bg-blue-50 rounded-2xl p-4">
-          <p className="text-2xl font-bold text-blue-700">{statsByType.opazanje || 0}</p>
+          <p className="text-2xl font-bold text-blue-700">{entries.filter(e => e.type === 'opazanje').length}</p>
           <p className="text-sm text-blue-600">Opažanja</p>
         </div>
         <div className="bg-purple-50 rounded-2xl p-4">
-          <p className="text-2xl font-bold text-purple-700">{statsByType.skupni_lov || 0}</p>
+          <p className="text-2xl font-bold text-purple-700">{entries.filter(e => e.type === 'skupni_lov').length}</p>
           <p className="text-sm text-purple-600">Skupni lovovi</p>
         </div>
         <div className="bg-gray-50 rounded-2xl p-4">
@@ -231,7 +257,7 @@ export default function DnevnikPage() {
                       </span>
                     </div>
                     <p className="text-xs text-gray-500 mt-1">
-                      {format(new Date(entry.hunted_at), 'dd. MMM yyyy, HH:mm', { locale: hr })}
+                      {format(new Date(entry.hunted_at), 'dd.MM.yyyy')} u {format(new Date(entry.hunted_at), 'HH:mm')}
                       {' · '}{(entry.profiles as any)?.full_name}
                       {(entry.poi as any)?.name && ` · 📍 ${(entry.poi as any).name}`}
                     </p>
@@ -239,7 +265,6 @@ export default function DnevnikPage() {
                   </div>
                   <span className="text-gray-400 text-xs">{expandedId === entry.id ? '▲' : '▼'}</span>
                 </div>
-
                 {expandedId === entry.id && (
                   <div className="px-6 pb-4 pl-16">
                     <div className="grid grid-cols-2 md:grid-cols-3 gap-x-6 gap-y-1 text-sm">
@@ -247,7 +272,7 @@ export default function DnevnikPage() {
                       {entry.oruzje && <div><span className="text-gray-400">Oružje:</span> {entry.oruzje}</div>}
                       {entry.municija && <div><span className="text-gray-400">Municija:</span> {entry.municija}</div>}
                       {entry.masa_trupla && <div><span className="text-gray-400">Masa:</span> {entry.masa_trupla} kg</div>}
-                      {entry.trofej_duzina && <div><span className="text-gray-400">Dužina:</span> {entry.trofej_duzina} cm</div>}
+                      {entry.trofej_duzina && <div><span className="text-gray-400">Trofej dužina:</span> {entry.trofej_duzina} cm</div>}
                       {entry.trofej_masa && <div><span className="text-gray-400">Trofej masa:</span> {entry.trofej_masa} kg</div>}
                       {entry.trofej_cic && <div><span className="text-gray-400">CIC:</span> {entry.trofej_cic} bod.</div>}
                       {entry.temperatura && <div><span className="text-gray-400">Temp:</span> {entry.temperatura}°C</div>}
@@ -278,11 +303,11 @@ export default function DnevnikPage() {
               <button onClick={() => { setShowForm(false); resetForm() }} className="text-gray-400 hover:text-gray-600 text-xl">✕</button>
             </div>
 
-            {/* Odabir tipa */}
+            {/* Tip */}
             <div className="grid grid-cols-5 gap-2 mb-5">
               {TYPES.map(t => (
                 <button key={t.key} onClick={() => setEntryType(t.key)}
-                  className={`py-2 rounded-xl text-center border transition-all ${entryType === t.key ? 'text-white border-transparent' : 'border-gray-200 hover:border-gray-300'}`}
+                  className={`py-2 rounded-xl text-center border transition-all ${entryType === t.key ? 'text-white border-transparent' : 'border-gray-200'}`}
                   style={{ background: entryType === t.key ? t.color : undefined }}>
                   <div className="text-xl">{t.icon}</div>
                   <div className="text-xs mt-0.5">{t.label}</div>
@@ -332,11 +357,9 @@ export default function DnevnikPage() {
                         {pois.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
                       </select>
                     </div>
-                    <div className="col-span-2">
-                      <label className={labelCls}>Datum i vrijeme</label>
-                      <input type="datetime-local" value={form.hunted_at}
-                        onChange={e => setForm(f => ({...f, hunted_at: e.target.value}))} className={inputCls} />
-                    </div>
+                  </div>
+                  <DateTimeFields />
+                  <div className="grid grid-cols-2 gap-3">
                     <div>
                       <label className={labelCls}>Oružje</label>
                       <input value={form.oruzje} onChange={e => setForm(f => ({...f, oruzje: e.target.value}))}
@@ -370,19 +393,18 @@ export default function DnevnikPage() {
                       </select>
                     </div>
                   </div>
-
                   {showTrofej && (
                     <div className="bg-amber-50 rounded-xl p-4">
                       <p className="text-sm font-semibold text-amber-800 mb-3">🏆 Trofejni podaci</p>
                       <div className="grid grid-cols-3 gap-3">
                         <div>
-                          <label className="text-xs text-gray-600 mb-1 block">Dužina rogovlja (cm)</label>
+                          <label className="text-xs text-gray-600 mb-1 block">Dužina (cm)</label>
                           <input type="number" step="0.1" value={form.trofej_duzina}
                             onChange={e => setForm(f => ({...f, trofej_duzina: e.target.value}))}
                             className="w-full border border-amber-200 rounded-lg px-2 py-2 text-sm focus:outline-none" placeholder="0.0" />
                         </div>
                         <div>
-                          <label className="text-xs text-gray-600 mb-1 block">Masa rogovlja (kg)</label>
+                          <label className="text-xs text-gray-600 mb-1 block">Masa (kg)</label>
                           <input type="number" step="0.01" value={form.trofej_masa}
                             onChange={e => setForm(f => ({...f, trofej_masa: e.target.value}))}
                             className="w-full border border-amber-200 rounded-lg px-2 py-2 text-sm focus:outline-none" placeholder="0.0" />
@@ -401,61 +423,53 @@ export default function DnevnikPage() {
 
               {/* OPAŽANJE */}
               {entryType === 'opazanje' && (
-                <div className="grid grid-cols-2 gap-3">
-                  <div>
-                    <label className={labelCls}>Vrsta divljači *</label>
-                    <select value={form.species} onChange={e => setForm(f => ({...f, species: e.target.value}))} className={inputCls}>
-                      <option value="">Odaberi...</option>
-                      {VRSTE_DIVLJACI.map(v => <option key={v}>{v}</option>)}
-                    </select>
+                <>
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className={labelCls}>Vrsta divljači *</label>
+                      <select value={form.species} onChange={e => setForm(f => ({...f, species: e.target.value}))} className={inputCls}>
+                        <option value="">Odaberi...</option>
+                        {VRSTE_DIVLJACI.map(v => <option key={v}>{v}</option>)}
+                      </select>
+                    </div>
+                    <div>
+                      <label className={labelCls}>Broj primjeraka</label>
+                      <input type="number" min="1" value={form.quantity}
+                        onChange={e => setForm(f => ({...f, quantity: parseInt(e.target.value) || 1}))} className={inputCls} />
+                    </div>
+                    <div>
+                      <label className={labelCls}>Spol</label>
+                      <select value={form.spol} onChange={e => setForm(f => ({...f, spol: e.target.value}))} className={inputCls}>
+                        {SPOL.map(s => <option key={s}>{s}</option>)}
+                      </select>
+                    </div>
+                    <div>
+                      <label className={labelCls}>Starost</label>
+                      <select value={form.starost} onChange={e => setForm(f => ({...f, starost: e.target.value}))} className={inputCls}>
+                        {STAROST.map(s => <option key={s}>{s}</option>)}
+                      </select>
+                    </div>
+                    <div>
+                      <label className={labelCls}>Lokacija / Čeka</label>
+                      <select value={form.poi_id} onChange={e => setForm(f => ({...f, poi_id: e.target.value}))} className={inputCls}>
+                        <option value="">Odaberi...</option>
+                        {pois.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+                      </select>
+                    </div>
+                    <div>
+                      <label className={labelCls}>Vjetar</label>
+                      <select value={form.vjetar} onChange={e => setForm(f => ({...f, vjetar: e.target.value}))} className={inputCls}>
+                        {VJETAR.map(v => <option key={v}>{v}</option>)}
+                      </select>
+                    </div>
                   </div>
-                  <div>
-                    <label className={labelCls}>Broj primjeraka</label>
-                    <input type="number" min="1" value={form.quantity}
-                      onChange={e => setForm(f => ({...f, quantity: parseInt(e.target.value) || 1}))} className={inputCls} />
-                  </div>
-                  <div>
-                    <label className={labelCls}>Spol (ako vidljivo)</label>
-                    <select value={form.spol} onChange={e => setForm(f => ({...f, spol: e.target.value}))} className={inputCls}>
-                      {SPOL.map(s => <option key={s}>{s}</option>)}
-                    </select>
-                  </div>
-                  <div>
-                    <label className={labelCls}>Starost (ako vidljivo)</label>
-                    <select value={form.starost} onChange={e => setForm(f => ({...f, starost: e.target.value}))} className={inputCls}>
-                      {STAROST.map(s => <option key={s}>{s}</option>)}
-                    </select>
-                  </div>
-                  <div>
-                    <label className={labelCls}>Lokacija / Čeka</label>
-                    <select value={form.poi_id} onChange={e => setForm(f => ({...f, poi_id: e.target.value}))} className={inputCls}>
-                      <option value="">Odaberi...</option>
-                      {pois.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
-                    </select>
-                  </div>
-                  <div>
-                    <label className={labelCls}>Datum i vrijeme</label>
-                    <input type="datetime-local" value={form.hunted_at}
-                      onChange={e => setForm(f => ({...f, hunted_at: e.target.value}))} className={inputCls} />
-                  </div>
-                  <div>
-                    <label className={labelCls}>Vjetar</label>
-                    <select value={form.vjetar} onChange={e => setForm(f => ({...f, vjetar: e.target.value}))} className={inputCls}>
-                      {VJETAR.map(v => <option key={v}>{v}</option>)}
-                    </select>
-                  </div>
-                  <div>
-                    <label className={labelCls}>Vidljivost</label>
-                    <select value={form.vidljivost} onChange={e => setForm(f => ({...f, vidljivost: e.target.value}))} className={inputCls}>
-                      {VIDLJIVOST.map(v => <option key={v}>{v}</option>)}
-                    </select>
-                  </div>
-                </div>
+                  <DateTimeFields />
+                </>
               )}
 
               {/* SKUPNI LOV */}
               {entryType === 'skupni_lov' && (
-                <div className="space-y-3">
+                <>
                   <div className="grid grid-cols-2 gap-3">
                     <div>
                       <label className={labelCls}>Vrsta divljači *</label>
@@ -469,12 +483,8 @@ export default function DnevnikPage() {
                       <input type="number" min="0" value={form.quantity}
                         onChange={e => setForm(f => ({...f, quantity: parseInt(e.target.value) || 0}))} className={inputCls} />
                     </div>
-                    <div className="col-span-2">
-                      <label className={labelCls}>Datum i vrijeme</label>
-                      <input type="datetime-local" value={form.hunted_at}
-                        onChange={e => setForm(f => ({...f, hunted_at: e.target.value}))} className={inputCls} />
-                    </div>
                   </div>
+                  <DateTimeFields />
                   <div>
                     <label className={labelCls}>Sudionici lova</label>
                     <div className="max-h-36 overflow-y-auto border border-gray-200 rounded-xl p-3">
@@ -491,30 +501,21 @@ export default function DnevnikPage() {
                         </label>
                       ))}
                     </div>
-                    {form.sudionici.length > 0 && (
-                      <p className="text-xs text-gray-500 mt-1">{form.sudionici.length} sudionika odabrano</p>
-                    )}
                   </div>
-                </div>
+                </>
               )}
 
               {/* RAD */}
               {entryType === 'rad' && (
-                <div className="space-y-3">
-                  <div className="grid grid-cols-2 gap-3">
-                    <div>
-                      <label className={labelCls}>Lokacija / Objekt</label>
-                      <select value={form.poi_id} onChange={e => setForm(f => ({...f, poi_id: e.target.value}))} className={inputCls}>
-                        <option value="">Odaberi...</option>
-                        {pois.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
-                      </select>
-                    </div>
-                    <div>
-                      <label className={labelCls}>Datum i vrijeme</label>
-                      <input type="datetime-local" value={form.hunted_at}
-                        onChange={e => setForm(f => ({...f, hunted_at: e.target.value}))} className={inputCls} />
-                    </div>
+                <>
+                  <div>
+                    <label className={labelCls}>Lokacija / Objekt</label>
+                    <select value={form.poi_id} onChange={e => setForm(f => ({...f, poi_id: e.target.value}))} className={inputCls}>
+                      <option value="">Odaberi...</option>
+                      {pois.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+                    </select>
                   </div>
+                  <DateTimeFields />
                   <div>
                     <label className={labelCls}>Sudionici</label>
                     <div className="max-h-32 overflow-y-auto border border-gray-200 rounded-xl p-3">
@@ -532,12 +533,12 @@ export default function DnevnikPage() {
                       ))}
                     </div>
                   </div>
-                </div>
+                </>
               )}
 
               {/* OSTALO */}
               {entryType === 'ostalo' && (
-                <div className="grid grid-cols-2 gap-3">
+                <>
                   <div>
                     <label className={labelCls}>Lokacija</label>
                     <select value={form.poi_id} onChange={e => setForm(f => ({...f, poi_id: e.target.value}))} className={inputCls}>
@@ -545,26 +546,18 @@ export default function DnevnikPage() {
                       {pois.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
                     </select>
                   </div>
-                  <div>
-                    <label className={labelCls}>Datum i vrijeme</label>
-                    <input type="datetime-local" value={form.hunted_at}
-                      onChange={e => setForm(f => ({...f, hunted_at: e.target.value}))} className={inputCls} />
-                  </div>
-                </div>
+                  <DateTimeFields />
+                </>
               )}
 
-              {/* Bilješka — uvijek */}
+              {/* Bilješka uvijek */}
               <div>
                 <label className={labelCls}>
                   {entryType === 'rad' ? 'Opis radova *' : entryType === 'ostalo' ? 'Opis *' : 'Bilješka'}
                 </label>
                 <textarea value={form.notes} onChange={e => setForm(f => ({...f, notes: e.target.value}))}
                   className={inputCls} rows={3}
-                  placeholder={
-                    entryType === 'rad' ? 'Opišite što je urađeno...' :
-                    entryType === 'ostalo' ? 'Opišite događaj...' :
-                    'Dodatne napomene...'
-                  } />
+                  placeholder={entryType === 'rad' ? 'Opišite što je urađeno...' : entryType === 'ostalo' ? 'Opišite događaj...' : 'Dodatne napomene...'} />
               </div>
 
               <button onClick={saveEntry}
