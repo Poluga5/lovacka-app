@@ -30,17 +30,28 @@ export default function ProfilPage() {
 
     const { data: prof } = await supabase
       .from('profiles').select('*').eq('id', user.id).single()
-    if (prof) {
-      setProfile(prof)
-      fillForm(prof)
-    }
+    if (prof) { setProfile(prof); fillForm(prof) }
 
     if (admin) {
-      const { data: allMembers } = await supabase
+      // Dohvati group_members pa za svaki dohvati profile
+      const { data: gms } = await supabase
         .from('group_members')
-        .select('role, profiles(*)')
+        .select('role, user_id')
         .eq('group_id', member.group_id)
-      setMembers(allMembers ?? [])
+
+      if (gms && gms.length > 0) {
+        const userIds = gms.map(g => g.user_id)
+        const { data: profs } = await supabase
+          .from('profiles')
+          .select('*')
+          .in('id', userIds)
+
+        const combined = gms.map(g => ({
+          role: g.role,
+          profiles: profs?.find(p => p.id === g.user_id) ?? null
+        }))
+        setMembers(combined)
+      }
       setView('list')
     }
   }
@@ -74,11 +85,7 @@ export default function ProfilPage() {
     }).eq('id', id)
     if (error) { toast.error('Greška pri spremanju'); return }
     toast.success('Podaci spremljeni!')
-    if (isAdmin) {
-      setView('list')
-      setSelectedMember(null)
-      load()
-    }
+    if (isAdmin) { setView('list'); setSelectedMember(null); load() }
   }
 
   function openMember(m: any) {
@@ -104,17 +111,13 @@ export default function ProfilPage() {
 
   return (
     <div style={{ padding: 24, maxWidth: 900, margin: '0 auto' }}>
-
-      {/* Header */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 24 }}>
         {isAdmin && view === 'form' && (
           <button onClick={() => { setView('list'); setSelectedMember(null) }}
-            style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: 22, color: '#6b7280', lineHeight: 1 }}>
-            ‹
-          </button>
+            style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: 22, color: '#6b7280' }}>‹</button>
         )}
         <h1 style={{ fontSize: 22, fontWeight: 600, margin: 0 }}>
-          {view === 'list' ? 'Članovi lovišta' : selectedMember ? (selectedMember.profiles?.full_name ?? 'Član') : 'Moj profil'}
+          {view === 'list' ? 'Članovi lovišta' : selectedMember ? selectedMember.profiles?.full_name : 'Moj profil'}
         </h1>
         {isAdmin && view === 'list' && (
           <button onClick={() => { setSelectedMember(null); fillForm(profile); setView('form') }}
@@ -124,9 +127,11 @@ export default function ProfilPage() {
         )}
       </div>
 
-      {/* Lista članova (samo admin) */}
       {isAdmin && view === 'list' && (
         <div style={{ background: 'white', borderRadius: 16, border: '1px solid #e5e7eb', overflow: 'hidden' }}>
+          {members.length === 0 && (
+            <div style={{ padding: 32, textAlign: 'center', color: '#9ca3af' }}>Učitavam članove...</div>
+          )}
           {members.map((m, i) => {
             const prof = m.profiles
             return (
@@ -155,7 +160,6 @@ export default function ProfilPage() {
         </div>
       )}
 
-      {/* Form */}
       {view === 'form' && (
         <div style={{ background: 'white', borderRadius: 16, border: '1px solid #e5e7eb', padding: 24 }}>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
@@ -168,20 +172,18 @@ export default function ProfilPage() {
                   type={field.type}
                   value={(form as any)[field.key]}
                   onChange={e => setForm(f => ({...f, [field.key]: e.target.value}))}
-                  disabled={field.disabled}
-                  style={{ width: '100%', border: '1px solid #e5e7eb', borderRadius: 8, padding: '8px 12px', fontSize: 14, boxSizing: 'border-box', background: field.disabled ? '#f9fafb' : 'white' }}
+                  disabled={(field as any).disabled}
+                  style={{ width: '100%', border: '1px solid #e5e7eb', borderRadius: 8, padding: '8px 12px', fontSize: 14, boxSizing: 'border-box', background: (field as any).disabled ? '#f9fafb' : 'white' }}
                 />
               </div>
             ))}
           </div>
-
           <div style={{ marginTop: 16 }}>
             <label style={{ fontSize: 12, fontWeight: 500, color: '#374151', display: 'block', marginBottom: 4 }}>Napomena</label>
             <textarea value={form.notes} onChange={e => setForm(f => ({...f, notes: e.target.value}))}
               style={{ width: '100%', border: '1px solid #e5e7eb', borderRadius: 8, padding: '8px 12px', fontSize: 14, boxSizing: 'border-box', resize: 'none' }}
               rows={3} />
           </div>
-
           <button onClick={saveProfile}
             style={{ marginTop: 20, background: '#247a4b', color: 'white', border: 'none', borderRadius: 8, padding: '10px 24px', fontSize: 14, cursor: 'pointer', fontWeight: 500 }}>
             Spremi podatke
