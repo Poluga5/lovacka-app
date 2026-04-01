@@ -2,6 +2,8 @@
 import { useEffect, useRef, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import toast from 'react-hot-toast'
+import { format, parseISO } from 'date-fns'
+import { hr } from 'date-fns/locale'
 import type { POI } from '@/types'
 
 const POI_ICONS: Record<string, string> = {
@@ -22,15 +24,19 @@ export default function KartaPage() {
   const markersRef = useRef<Map<string, any>>(new Map())
   const [pois, setPois] = useState<POI[]>([])
   const [selectedPOI, setSelectedPOI] = useState<POI | null>(null)
+  const [poiReservations, setPoiReservations] = useState<any[]>([])
   const [mode, setMode] = useState<Mode>('view')
   const [boundaryPoints, setBoundaryPoints] = useState<[number, number][]>([])
   const [clickedCoords, setClickedCoords] = useState<[number, number] | null>(null)
   const [newPOI, setNewPOI] = useState({ name: '', type: 'ceka', description: '' })
   const [editPOI, setEditPOI] = useState({ name: '', type: 'ceka', description: '' })
   const [groupId, setGroupId] = useState<string | null>(null)
+  const [userId, setUserId] = useState<string | null>(null)
   const [mapStyle, setMapStyle] = useState('karta')
   const [areas, setAreas] = useState<any[]>([])
   const [isAdmin, setIsAdmin] = useState(false)
+  const [showNewRes, setShowNewRes] = useState(false)
+  const [newRes, setNewRes] = useState({ date_start: '', date_end: '', notes: '' })
   const modeRef = useRef<Mode>('view')
   const boundaryPointsRef = useRef<[number, number][]>([])
   const previewPolyRef = useRef<any>(null)
@@ -65,6 +71,7 @@ export default function KartaPage() {
 
       const { data: { user } } = await supabase.auth.getUser()
       if (!user) return
+      setUserId(user.id)
       const { data: member } = await supabase.from('group_members').select('group_id, role').eq('user_id', user.id).single()
       if (!member) return
       setGroupId(member.group_id)
@@ -100,6 +107,7 @@ export default function KartaPage() {
           }
         } else {
           setSelectedPOI(null)
+          setPoiReservations([])
         }
       })
     }
@@ -122,6 +130,20 @@ export default function KartaPage() {
     if (mapRef.current) mapRef.current.getContainer().style.cursor = mode !== 'view' ? 'crosshair' : ''
   }, [mode])
 
+  async function selectPOI(poi: POI) {
+    setSelectedPOI(poi)
+    setShowNewRes(false)
+    setMode('view')
+    const { data } = await supabase
+      .from('reservations')
+      .select('*, profiles(full_name)')
+      .eq('poi_id', poi.id)
+      .eq('status', 'aktivna')
+      .gte('date_end', new Date().toISOString())
+      .order('date_start')
+    setPoiReservations(data ?? [])
+  }
+
   function addPOIMarker(L: any, map: any, poi: POI) {
     const icon = L.divIcon({
       html: `<div style="background:${POI_COLORS[poi.type]};width:32px;height:32px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:16px;border:2px solid white;box-shadow:0 2px 8px rgba(0,0,0,0.3);">${POI_ICONS[poi.type]}</div>`,
@@ -129,11 +151,7 @@ export default function KartaPage() {
     })
     const c = poi.geom?.coordinates ?? [16.625, 45.568]
     const marker = L.marker([c[1], c[0]], { icon }).addTo(map)
-      .on('click', (e: any) => {
-        e.originalEvent?.stopPropagation()
-        setSelectedPOI(poi)
-        setMode('view')
-      })
+      .on('click', (e: any) => { e.originalEvent?.stopPropagation(); selectPOI(poi) })
     markersRef.current.set(poi.id, marker)
     return marker
   }
@@ -207,6 +225,34 @@ export default function KartaPage() {
     if (marker && mapRef.current) mapRef.current.removeLayer(marker)
     markersRef.current.delete(poi.id)
     setSelectedPOI(null)
+    setPoiReservations([])
+  }
+
+  async function createReservation() {
+    if (!newRes.date_start || !newRes.date_end || !selectedPOI || !groupId || !userId) return
+    const { error } = await supabase.from('reservations').insert({
+      poi_id: selectedPOI.id,
+      group_id: groupId,
+      user_id: userId,
+      date_start: new Date(newRes.date_start).toISOString(),
+      date_end: new Date(newRes.date_end).toISOString(),
+      notes: newRes.notes,
+    })
+    if (error) {
+      if (error.code === '23505') toast.error('Ta čeka je već rezervirana u tom terminu!')
+      else toast.error('Greška')
+      return
+    }
+    toast.success('Rezervacija kreirana!')
+    setShowNewRes(false)
+    setNewRes({ date_start: '', date_end: '', notes: '' })
+    selectPOI(selectedPOI)
+  }
+
+  async function cancelReservation(id: string) {
+    await supabase.from('reservations').update({ status: 'otkazana' }).eq('id', id)
+    toast.success('Rezervacija otkazana')
+    if (selectedPOI) selectPOI(selectedPOI)
   }
 
   function cancelMode() {
@@ -282,9 +328,9 @@ export default function KartaPage() {
           </div>
         )}
 
-        {/* Selected POI — view */}
+        {/* Selected POI panel */}
         {selectedPOI && mode === 'view' && (
-          <div style={{ position: 'absolute', bottom: 16, left: 16, background: 'white', borderRadius: 16, padding: 20, minWidth: 280, zIndex: 1000, boxShadow: '0 4px 20px rgba(0,0,0,0.15)' }}>
+          <div style={{ position: 'absolute', bottom: 16, right: 16, background: 'white', borderRadius: 16, padding: 20, width: 300, zIndex: 1000, boxShadow: '0 4px 20px rgba(0,0,0,0.15)', maxHeight: '70vh', overflowY: 'auto' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 12 }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
                 <span style={{ fontSize: 28 }}>{POI_ICONS[selectedPOI.type]}</span>
@@ -293,11 +339,81 @@ export default function KartaPage() {
                   <span style={{ fontSize: 11, background: POI_COLORS[selectedPOI.type], color: 'white', padding: '2px 8px', borderRadius: 20 }}>{selectedPOI.type}</span>
                 </div>
               </div>
-              <button onClick={() => setSelectedPOI(null)} style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: 16, color: '#9ca3af' }}>✕</button>
+              <button onClick={() => { setSelectedPOI(null); setPoiReservations([]) }} style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: 16, color: '#9ca3af' }}>✕</button>
             </div>
+
             {selectedPOI.description && <p style={{ fontSize: 13, color: '#4b5563', marginBottom: 12 }}>{selectedPOI.description}</p>}
+
+            {/* Rezervacije */}
+            <div style={{ borderTop: '1px solid #e5e7eb', paddingTop: 12, marginBottom: 12 }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+                <span style={{ fontSize: 13, fontWeight: 600, color: '#374151' }}>
+                  Rezervacije ({poiReservations.length})
+                </span>
+                {selectedPOI.type === 'ceka' && (
+                  <button onClick={() => setShowNewRes(!showNewRes)}
+                    style={{ fontSize: 11, padding: '4px 10px', background: '#247a4b', color: 'white', border: 'none', borderRadius: 6, cursor: 'pointer' }}>
+                    + Nova
+                  </button>
+                )}
+              </div>
+
+              {poiReservations.length === 0 ? (
+                <div style={{ fontSize: 12, color: '#9ca3af', textAlign: 'center', padding: '8px 0' }}>
+                  Nema aktivnih rezervacija
+                </div>
+              ) : (
+                poiReservations.map(res => (
+                  <div key={res.id} style={{ background: '#f0fdf4', borderRadius: 8, padding: '8px 10px', marginBottom: 6 }}>
+                    <div style={{ fontSize: 12, fontWeight: 500, color: '#15803d' }}>
+                      {(res.profiles as any)?.full_name}
+                    </div>
+                    <div style={{ fontSize: 11, color: '#4b5563', marginTop: 2 }}>
+                      {format(parseISO(res.date_start), 'dd.MM.yyyy HH:mm', { locale: hr })} →{' '}
+                      {format(parseISO(res.date_end), 'HH:mm', { locale: hr })}
+                    </div>
+                    {res.notes && <div style={{ fontSize: 11, color: '#6b7280', marginTop: 2 }}>{res.notes}</div>}
+                    {res.user_id === userId && (
+                      <button onClick={() => cancelReservation(res.id)}
+                        style={{ fontSize: 11, color: '#dc2626', background: 'none', border: 'none', cursor: 'pointer', marginTop: 4, padding: 0 }}>
+                        Otkaži
+                      </button>
+                    )}
+                  </div>
+                ))
+              )}
+
+              {/* Nova rezervacija forma */}
+              {showNewRes && (
+                <div style={{ background: '#f8fafc', borderRadius: 8, padding: 12, marginTop: 8 }}>
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6, marginBottom: 6 }}>
+                    <div>
+                      <label style={{ fontSize: 11, color: '#374151', display: 'block', marginBottom: 2 }}>Od</label>
+                      <input type="datetime-local" value={newRes.date_start}
+                        onChange={e => setNewRes(r => ({...r, date_start: e.target.value}))}
+                        style={{ width: '100%', border: '1px solid #e5e7eb', borderRadius: 6, padding: '5px 8px', fontSize: 11, boxSizing: 'border-box' }} />
+                    </div>
+                    <div>
+                      <label style={{ fontSize: 11, color: '#374151', display: 'block', marginBottom: 2 }}>Do</label>
+                      <input type="datetime-local" value={newRes.date_end}
+                        onChange={e => setNewRes(r => ({...r, date_end: e.target.value}))}
+                        style={{ width: '100%', border: '1px solid #e5e7eb', borderRadius: 6, padding: '5px 8px', fontSize: 11, boxSizing: 'border-box' }} />
+                    </div>
+                  </div>
+                  <input value={newRes.notes} onChange={e => setNewRes(r => ({...r, notes: e.target.value}))}
+                    style={{ width: '100%', border: '1px solid #e5e7eb', borderRadius: 6, padding: '5px 8px', fontSize: 11, marginBottom: 6, boxSizing: 'border-box' }}
+                    placeholder="Napomena..." />
+                  <button onClick={createReservation}
+                    style={{ width: '100%', background: '#247a4b', color: 'white', border: 'none', borderRadius: 6, padding: '7px', fontSize: 12, cursor: 'pointer', fontWeight: 500 }}>
+                    Rezerviraj
+                  </button>
+                </div>
+              )}
+            </div>
+
+            {/* Edit/Delete */}
             {isAdmin && (
-              <div style={{ display: 'flex', gap: 8 }}>
+              <div style={{ display: 'flex', gap: 8, borderTop: '1px solid #e5e7eb', paddingTop: 12 }}>
                 <button onClick={() => {
                   setEditPOI({ name: selectedPOI.name, type: selectedPOI.type, description: selectedPOI.description ?? '' })
                   setMode('edit_poi')
@@ -315,7 +431,7 @@ export default function KartaPage() {
 
         {/* Edit POI */}
         {selectedPOI && mode === 'edit_poi' && (
-          <div style={{ position: 'absolute', bottom: 16, left: 16, background: 'white', borderRadius: 16, padding: 20, minWidth: 280, zIndex: 1000, boxShadow: '0 4px 20px rgba(0,0,0,0.15)' }}>
+          <div style={{ position: 'absolute', bottom: 16, right: 16, background: 'white', borderRadius: 16, padding: 20, width: 300, zIndex: 1000, boxShadow: '0 4px 20px rgba(0,0,0,0.15)' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 16 }}>
               <span style={{ fontWeight: 600 }}>Uredi POI</span>
               <button onClick={() => setMode('view')} style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: 16, color: '#9ca3af' }}>✕</button>
