@@ -2,163 +2,153 @@
 import { useEffect, useRef, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { format } from 'date-fns'
-import type { Message } from '@/types'
+import { hr } from 'date-fns/locale'
 
 export default function ChatPage() {
-  const [messages, setMessages] = useState<Message[]>([])
+  const [messages, setMessages] = useState<any[]>([])
   const [newMessage, setNewMessage] = useState('')
+  const [profile, setProfile] = useState<any>(null)
   const [groupId, setGroupId] = useState<string | null>(null)
-  const [threadId, setThreadId] = useState<string | null>(null)
   const [userId, setUserId] = useState<string | null>(null)
-  const [userName, setUserName] = useState('')
   const bottomRef = useRef<HTMLDivElement>(null)
   const supabase = createClient()
 
-  useEffect(() => {
-    async function init() {
-      const { data: { user } } = await supabase.auth.getUser()
-      if (!user) return
-      setUserId(user.id)
-
-      const { data: profile } = await supabase.from('profiles').select('full_name').eq('id', user.id).single()
-      setUserName(profile?.full_name ?? '')
-
-      const { data: member } = await supabase
-        .from('group_members').select('group_id').eq('user_id', user.id).single()
-      if (!member) return
-      setGroupId(member.group_id)
-
-      let { data: thread } = await supabase
-        .from('threads').select('id').eq('group_id', member.group_id).eq('scope', 'group').single()
-
-      if (!thread) {
-        const { data: newThread } = await supabase
-          .from('threads').insert({ group_id: member.group_id, scope: 'group', title: 'Grupni chat' })
-          .select().single()
-        thread = newThread
-      }
-      if (!thread) return
-      setThreadId(thread.id)
-
-      const { data: msgs } = await supabase
-        .from('messages').select('*, profiles(full_name)')
-        .eq('thread_id', thread.id)
-        .order('created_at', { ascending: true })
-      setMessages(msgs ?? [])
-
-      // Realtime subscription
-      supabase.channel(`chat-${thread.id}`)
-        .on('postgres_changes', {
-          event: 'INSERT', schema: 'public', table: 'messages',
-          filter: `thread_id=eq.${thread.id}`
-        }, async (payload) => {
-          const { data: msg } = await supabase
-            .from('messages').select('*, profiles(full_name)').eq('id', payload.new.id).single()
-          if (msg) setMessages(m => [...m, msg])
-        })
-        .subscribe()
-    }
-    init()
-  }, [])
+  useEffect(() => { load() }, [])
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [messages])
 
-  async function sendMessage(e: React.FormEvent) {
-    e.preventDefault()
-    if (!newMessage.trim() || !groupId || !threadId || !userId) return
-    const text = newMessage.trim()
-    setNewMessage('')
+  async function load() {
+    const { data: { user } } = await supabase.auth.getUser()
+    if (!user) return
+    setUserId(user.id)
 
-    await supabase.from('messages').insert({
-      thread_id: threadId,
+    const { data: member } = await supabase
+      .from('group_members').select('group_id').eq('user_id', user.id).single()
+    if (!member) return
+    setGroupId(member.group_id)
+
+    const { data: prof } = await supabase
+      .from('profiles').select('*').eq('id', user.id).single()
+    if (prof) setProfile(prof)
+
+    const { data: msgs } = await supabase
+      .from('chat_messages')
+      .select('*, profiles(full_name)')
+      .eq('group_id', member.group_id)
+      .order('created_at', { ascending: true })
+    setMessages(msgs ?? [])
+
+    // Realtime
+    supabase.channel('chat')
+      .on('postgres_changes', {
+        event: 'INSERT',
+        schema: 'public',
+        table: 'chat_messages',
+        filter: `group_id=eq.${member.group_id}`
+      }, async (payload) => {
+        const { data: msg } = await supabase
+          .from('chat_messages')
+          .select('*, profiles(full_name)')
+          .eq('id', payload.new.id)
+          .single()
+        if (msg) setMessages(prev => [...prev, msg])
+      })
+      .subscribe()
+  }
+
+  async function sendMessage() {
+    if (!newMessage.trim() || !groupId || !userId) return
+    const content = newMessage.trim()
+    setNewMessage('')
+    await supabase.from('chat_messages').insert({
       group_id: groupId,
-      author_id: userId,
-      body: text,
+      user_id: userId,
+      content,
     })
   }
 
-  function groupedMessages() {
-    const groups: { date: string; messages: Message[] }[] = []
-    messages.forEach(msg => {
-      const date = format(new Date(msg.created_at), 'dd.MM.yyyy')
-      const last = groups[groups.length - 1]
-      if (last && last.date === date) last.messages.push(msg)
-      else groups.push({ date, messages: [msg] })
-    })
-    return groups
+  function handleKeyDown(e: React.KeyboardEvent) {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault()
+      sendMessage()
+    }
   }
 
   return (
-    <div className="h-full flex flex-col">
-      <div className="bg-white border-b border-gray-200 px-6 py-4">
-        <h1 className="font-semibold text-gray-800">Grupni chat</h1>
-        <p className="text-xs text-gray-400">Poruke se isporučuju u stvarnom vremenu</p>
+    <div style={{ display: 'flex', flexDirection: 'column', height: 'calc(100vh - 60px)', background: '#f8fafc' }}>
+      {/* Header */}
+      <div style={{ background: 'white', borderBottom: '1px solid #e5e7eb', padding: '14px 20px', flexShrink: 0 }}>
+        <h1 style={{ fontWeight: 700, fontSize: 16, margin: 0 }}>Grupni chat</h1>
+        <p style={{ fontSize: 12, color: '#9ca3af', margin: '2px 0 0' }}>Poruke se isporučuju u stvarnom vremenu</p>
       </div>
 
-      <div className="flex-1 overflow-y-auto p-6 space-y-6">
+      {/* Poruke */}
+      <div style={{ flex: 1, overflowY: 'auto', padding: '16px 20px', display: 'flex', flexDirection: 'column', gap: 8 }}>
         {messages.length === 0 && (
-          <div className="text-center text-gray-400 py-12">
-            <p className="text-4xl mb-3">💬</p>
+          <div style={{ textAlign: 'center', color: '#9ca3af', marginTop: 60 }}>
+            <div style={{ fontSize: 40, marginBottom: 8 }}>💬</div>
             <p>Nema još poruka. Budi prvi!</p>
           </div>
         )}
-
-        {groupedMessages().map(group => (
-          <div key={group.date}>
-            <div className="flex items-center gap-3 mb-4">
-              <div className="flex-1 h-px bg-gray-200" />
-              <span className="text-xs text-gray-400 font-medium">{group.date}</span>
-              <div className="flex-1 h-px bg-gray-200" />
+        {messages.map(msg => {
+          const isMe = msg.user_id === userId
+          return (
+            <div key={msg.id} style={{ display: 'flex', flexDirection: 'column', alignItems: isMe ? 'flex-end' : 'flex-start' }}>
+              {!isMe && (
+                <span style={{ fontSize: 11, color: '#6b7280', marginBottom: 2, marginLeft: 4 }}>
+                  {(msg.profiles as any)?.full_name}
+                </span>
+              )}
+              <div style={{
+                maxWidth: '70%', padding: '10px 14px', borderRadius: isMe ? '18px 18px 4px 18px' : '18px 18px 18px 4px',
+                background: isMe ? '#247a4b' : 'white',
+                color: isMe ? 'white' : '#1f2937',
+                boxShadow: '0 1px 4px rgba(0,0,0,0.08)',
+                fontSize: 14, lineHeight: 1.5, whiteSpace: 'pre-wrap', wordBreak: 'break-word'
+              }}>
+                {msg.content}
+              </div>
+              <span style={{ fontSize: 10, color: '#9ca3af', marginTop: 2, marginLeft: isMe ? 0 : 4, marginRight: isMe ? 4 : 0 }}>
+                {format(new Date(msg.created_at), 'dd.MM.yyyy HH:mm', { locale: hr })}
+              </span>
             </div>
-            <div className="space-y-3">
-              {group.messages.map((msg, idx) => {
-                const isOwn = msg.author_id === userId
-                const prevMsg = group.messages[idx - 1]
-                const showName = !prevMsg || prevMsg.author_id !== msg.author_id
-
-                return (
-                  <div key={msg.id} className={`flex ${isOwn ? 'justify-end' : 'justify-start'}`}>
-                    <div className={`max-w-[75%] ${isOwn ? 'items-end' : 'items-start'} flex flex-col`}>
-                      {showName && !isOwn && (
-                        <span className="text-xs text-gray-500 font-medium mb-1 ml-1">
-                          {(msg.profiles as any)?.full_name}
-                        </span>
-                      )}
-                      <div className={`px-4 py-2.5 rounded-2xl text-sm ${
-                        isOwn
-                          ? 'bg-forest-600 text-white rounded-tr-sm'
-                          : 'bg-white text-gray-800 border border-gray-100 shadow-sm rounded-tl-sm'
-                      }`}>
-                        {msg.body}
-                      </div>
-                      <span className="text-xs text-gray-400 mt-1 mx-1">
-                        {format(new Date(msg.created_at), 'HH:mm')}
-                      </span>
-                    </div>
-                  </div>
-                )
-              })}
-            </div>
-          </div>
-        ))}
+          )
+        })}
         <div ref={bottomRef} />
       </div>
 
-      <div className="bg-white border-t border-gray-200 p-4">
-        <form onSubmit={sendMessage} className="flex gap-3">
-          <input
-            value={newMessage}
-            onChange={e => setNewMessage(e.target.value)}
-            className="flex-1 border border-gray-200 rounded-2xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-forest-500"
-            placeholder="Napiši poruku..."
-          />
-          <button type="submit" disabled={!newMessage.trim()}
-            className="bg-forest-600 hover:bg-forest-700 disabled:opacity-40 text-white px-5 py-2.5 rounded-2xl text-sm font-medium transition-colors">
-            Pošalji
-          </button>
-        </form>
+      {/* Input */}
+      <div style={{ background: 'white', borderTop: '1px solid #e5e7eb', padding: '12px 16px', display: 'flex', gap: 10, alignItems: 'flex-end', flexShrink: 0 }}>
+        <textarea
+          value={newMessage}
+          onChange={e => setNewMessage(e.target.value)}
+          onKeyDown={handleKeyDown}
+          placeholder="Napiši poruku... (Enter = pošalji, Shift+Enter = novi red)"
+          rows={1}
+          style={{
+            flex: 1, border: '1px solid #e5e7eb', borderRadius: 12, padding: '10px 14px',
+            fontSize: 14, resize: 'none', outline: 'none', fontFamily: 'inherit',
+            maxHeight: 120, overflowY: 'auto', lineHeight: 1.5
+          }}
+          onInput={e => {
+            const el = e.target as HTMLTextAreaElement
+            el.style.height = 'auto'
+            el.style.height = Math.min(el.scrollHeight, 120) + 'px'
+          }}
+        />
+        <button onClick={sendMessage}
+          disabled={!newMessage.trim()}
+          style={{
+            background: newMessage.trim() ? '#247a4b' : '#e5e7eb',
+            color: newMessage.trim() ? 'white' : '#9ca3af',
+            border: 'none', borderRadius: 12, padding: '10px 20px',
+            fontSize: 14, cursor: newMessage.trim() ? 'pointer' : 'default',
+            fontWeight: 500, transition: 'all 0.2s', flexShrink: 0
+          }}>
+          Pošalji
+        </button>
       </div>
     </div>
   )
