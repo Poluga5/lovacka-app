@@ -4,20 +4,10 @@ import { createClient } from '@/lib/supabase/client'
 import { format } from 'date-fns'
 import { hr } from 'date-fns/locale'
 
-type Thread = {
-  id: string
-  name: string
-  is_group: boolean
-  participants: string[]
-  last_message?: string
-  last_at?: string
-  unread?: number
-}
-
 export default function ChatPage() {
   const [members, setMembers] = useState<any[]>([])
-  const [threads, setThreads] = useState<Thread[]>([])
-  const [activeThread, setActiveThread] = useState<string | null>(null)
+  const [threads, setThreads] = useState<any[]>([])
+  const [activeThread, setActiveThread] = useState<string>('group')
   const [messages, setMessages] = useState<any[]>([])
   const [newMessage, setNewMessage] = useState('')
   const [groupId, setGroupId] = useState<string | null>(null)
@@ -27,160 +17,131 @@ export default function ChatPage() {
   const [newChatName, setNewChatName] = useState('')
   const [editingId, setEditingId] = useState<string | null>(null)
   const [editContent, setEditContent] = useState('')
+  const [loading, setLoading] = useState(true)
   const bottomRef = useRef<HTMLDivElement>(null)
+  const groupIdRef = useRef<string | null>(null)
+  const userIdRef = useRef<string | null>(null)
   const supabase = createClient()
 
-  useEffect(() => { load() }, [])
+  useEffect(() => { init() }, [])
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [messages])
 
-  async function load() {
+  async function init() {
     const { data: { user } } = await supabase.auth.getUser()
     if (!user) return
+
+    userIdRef.current = user.id
     setUserId(user.id)
 
     const { data: member } = await supabase
       .from('group_members').select('group_id').eq('user_id', user.id).single()
     if (!member) return
+
+    groupIdRef.current = member.group_id
     setGroupId(member.group_id)
 
-    // Dohvati sve članove
+    // Dohvati članove
     const { data: allMembers } = await supabase
       .from('group_members')
       .select('user_id, profiles(full_name, email)')
       .eq('group_id', member.group_id)
     setMembers(allMembers?.filter(m => m.user_id !== user.id) ?? [])
 
-    // Dohvati threadove
-    await loadThreads(member.group_id, user.id)
-
-    // Realtime
-    supabase.channel('chat-messages')
-      .on('postgres_changes', {
-        event: '*', schema: 'public', table: 'chat_messages'
-      }, () => {
-        loadThreads(member.group_id, user.id)
-        if (activeThread) loadMessages(activeThread)
-      })
-      .subscribe()
-  }
-
-  async function loadThreads(gid: string, uid: string) {
-    // Grupni chat uvijek postoji
-    const groupThread: Thread = {
-      id: 'group',
-      name: 'Svi članovi',
-      is_group: true,
-      participants: [],
-    }
-
-    // Dohvati zadnje poruke za grupni chat
-    const { data: lastGroup } = await supabase
-      .from('chat_messages')
-      .select('content, created_at')
-      .eq('group_id', gid)
-      .is('thread_id', null)
-      .order('created_at', { ascending: false })
-      .limit(1)
-
-    if (lastGroup?.[0]) {
-      groupThread.last_message = lastGroup[0].content
-      groupThread.last_at = lastGroup[0].created_at
-    }
-
     // Dohvati privatne threadove
     const { data: privateThreads } = await supabase
       .from('chat_threads')
       .select('*')
-      .eq('group_id', gid)
-      .contains('participants', [uid])
+      .eq('group_id', member.group_id)
+      .contains('participants', [user.id])
       .order('updated_at', { ascending: false })
+    setThreads(privateThreads ?? [])
 
-    const threadList: Thread[] = [groupThread]
+    // Učitaj grupne poruke
+    await fetchMessages('group', member.group_id)
+    setLoading(false)
 
-    for (const t of privateThreads ?? []) {
-      const { data: lastMsg } = await supabase
-        .from('chat_messages')
-        .select('content, created_at')
-        .eq('thread_id', t.id)
-        .order('created_at', { ascending: false })
-        .limit(1)
-
-      threadList.push({
-        id: t.id,
-        name: t.name,
-        is_group: t.is_group,
-        participants: t.participants,
-        last_message: lastMsg?.[0]?.content,
-        last_at: lastMsg?.[0]?.created_at,
+    // Realtime
+    supabase.channel('chat-all')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'chat_messages' }, () => {
+        fetchMessages(activeThread, groupIdRef.current!)
       })
-    }
-
-    setThreads(threadList)
-    if (!activeThread) setActiveThread('group')
+      .subscribe()
   }
 
-  async function loadMessages(threadId: string) {
-    let query = supabase
-      .from('chat_messages')
-      .select('*, profiles(full_name)')
-      .order('created_at', { ascending: true })
+  async function fetchMessages(threadId: string, gid: string) {
+    if (!gid) return
+    let data: any[] = []
 
     if (threadId === 'group') {
-      query = query.eq('group_id', groupId!).is('thread_id', null)
+      const { data: msgs } = await supabase
+        .from('chat_messages')
+        .select('*, profiles(full_name)')
+        .eq('group_id', gid)
+        .is('thread_id', null)
+        .order('created_at', { ascending: true })
+      data = msgs ?? []
     } else {
-      query = query.eq('thread_id', threadId)
+      const { data: msgs } = await supabase
+        .from('chat_messages')
+        .select('*, profiles(full_name)')
+        .eq('thread_id', threadId)
+        .order('created_at', { ascending: true })
+      data = msgs ?? []
     }
-
-    const { data } = await query
-    setMessages(data ?? [])
+    setMessages(data)
   }
 
-  useEffect(() => {
-    if (activeThread && groupId) loadMessages(activeThread)
-  }, [activeThread, groupId])
+  async function switchThread(threadId: string) {
+    setActiveThread(threadId)
+    await fetchMessages(threadId, groupIdRef.current!)
+  }
 
   async function sendMessage() {
-    if (!newMessage.trim() || !groupId || !userId) return
+    const gid = groupIdRef.current
+    const uid = userIdRef.current
+    if (!newMessage.trim() || !gid || !uid) return
     const content = newMessage.trim()
     setNewMessage('')
 
     if (activeThread === 'group') {
-      await supabase.from('chat_messages').insert({
-        group_id: groupId, user_id: userId, content
-      })
+      await supabase.from('chat_messages').insert({ group_id: gid, user_id: uid, content })
     } else {
-      await supabase.from('chat_messages').insert({
-        group_id: groupId, user_id: userId, content, thread_id: activeThread
-      })
+      await supabase.from('chat_messages').insert({ group_id: gid, user_id: uid, content, thread_id: activeThread })
       await supabase.from('chat_threads').update({ updated_at: new Date().toISOString() }).eq('id', activeThread)
     }
-    await loadMessages(activeThread!)
+    await fetchMessages(activeThread, gid)
   }
 
   async function createThread() {
-    if (selectedMembers.length === 0 || !groupId || !userId) return
-    const participants = [userId, ...selectedMembers]
+    const gid = groupIdRef.current
+    const uid = userIdRef.current
+    if (selectedMembers.length === 0 || !gid || !uid) return
+
+    const participants = [uid, ...selectedMembers]
     const name = newChatName || (selectedMembers.length === 1
       ? members.find(m => m.user_id === selectedMembers[0])?.profiles?.full_name ?? 'Chat'
       : `Grupa (${participants.length})`)
 
     const { data, error } = await supabase.from('chat_threads').insert({
-      group_id: groupId,
-      name,
-      is_group: selectedMembers.length > 1,
-      participants,
-      created_by: userId,
+      group_id: gid, name, is_group: selectedMembers.length > 1,
+      participants, created_by: uid,
     }).select().single()
 
     if (error) { console.error(error); return }
+
+    const { data: updatedThreads } = await supabase
+      .from('chat_threads').select('*')
+      .eq('group_id', gid).contains('participants', [uid])
+      .order('updated_at', { ascending: false })
+    setThreads(updatedThreads ?? [])
+
     setShowNewChat(false)
     setSelectedMembers([])
     setNewChatName('')
-    await loadThreads(groupId, userId)
-    setActiveThread(data.id)
+    switchThread(data.id)
   }
 
   async function deleteMessage(id: string) {
@@ -196,16 +157,14 @@ export default function ChatPage() {
     setEditingId(null)
   }
 
-  function handleKeyDown(e: React.KeyboardEvent) {
-    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage() }
-  }
-
-  const activeThreadData = threads.find(t => t.id === activeThread)
+  const activeThreadData = activeThread === 'group'
+    ? { name: 'Svi članovi', is_group: true }
+    : threads.find(t => t.id === activeThread)
 
   return (
     <div style={{ display: 'flex', height: 'calc(100vh - 60px)' }}>
 
-      {/* Sidebar — lista threadova */}
+      {/* Sidebar */}
       <div style={{ width: 260, borderRight: '1px solid #e5e7eb', background: 'white', display: 'flex', flexDirection: 'column', flexShrink: 0 }}>
         <div style={{ padding: '14px 16px', borderBottom: '1px solid #e5e7eb', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
           <span style={{ fontWeight: 700, fontSize: 15 }}>Poruke</span>
@@ -215,56 +174,61 @@ export default function ChatPage() {
           </button>
         </div>
 
-        {/* Nova chat forma */}
         {showNewChat && (
           <div style={{ padding: 12, borderBottom: '1px solid #e5e7eb', background: '#f8fafc' }}>
             <div style={{ fontSize: 11, fontWeight: 600, color: '#374151', marginBottom: 6 }}>Odaberi članove:</div>
-            <div style={{ maxHeight: 150, overflowY: 'auto', marginBottom: 8 }}>
-              {members.map(m => (
-                <label key={m.user_id} style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '4px 0', cursor: 'pointer', fontSize: 13 }}>
-                  <input type="checkbox"
-                    checked={selectedMembers.includes(m.user_id)}
-                    onChange={() => setSelectedMembers(prev =>
-                      prev.includes(m.user_id) ? prev.filter(x => x !== m.user_id) : [...prev, m.user_id]
-                    )} />
-                  {(m.profiles as any)?.full_name}
-                </label>
-              ))}
-            </div>
+            {members.length === 0 ? (
+              <div style={{ fontSize: 12, color: '#9ca3af' }}>Nema drugih članova</div>
+            ) : (
+              <div style={{ maxHeight: 150, overflowY: 'auto', marginBottom: 8 }}>
+                {members.map(m => (
+                  <label key={m.user_id} style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '4px 0', cursor: 'pointer', fontSize: 13 }}>
+                    <input type="checkbox"
+                      checked={selectedMembers.includes(m.user_id)}
+                      onChange={() => setSelectedMembers(prev =>
+                        prev.includes(m.user_id) ? prev.filter(x => x !== m.user_id) : [...prev, m.user_id]
+                      )} />
+                    {(m.profiles as any)?.full_name}
+                  </label>
+                ))}
+              </div>
+            )}
             {selectedMembers.length > 1 && (
               <input value={newChatName} onChange={e => setNewChatName(e.target.value)}
                 placeholder="Naziv grupe (opcionalno)"
                 style={{ width: '100%', border: '1px solid #e5e7eb', borderRadius: 6, padding: '5px 8px', fontSize: 12, marginBottom: 6, boxSizing: 'border-box' }} />
             )}
-            <button onClick={createThread}
-              disabled={selectedMembers.length === 0}
+            <button onClick={createThread} disabled={selectedMembers.length === 0}
               style={{ width: '100%', background: selectedMembers.length > 0 ? '#247a4b' : '#e5e7eb', color: selectedMembers.length > 0 ? 'white' : '#9ca3af', border: 'none', borderRadius: 6, padding: '6px', fontSize: 12, cursor: selectedMembers.length > 0 ? 'pointer' : 'default', fontWeight: 500 }}>
               Kreiraj chat
             </button>
           </div>
         )}
 
-        {/* Lista threadova */}
         <div style={{ flex: 1, overflowY: 'auto' }}>
+          {/* Grupni chat */}
+          <div onClick={() => switchThread('group')}
+            style={{ padding: '12px 16px', cursor: 'pointer', borderBottom: '1px solid #f3f4f6', background: activeThread === 'group' ? '#f0fdf4' : 'white', borderLeft: activeThread === 'group' ? '3px solid #247a4b' : '3px solid transparent' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <div style={{ width: 36, height: 36, borderRadius: '50%', background: '#247a4b', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 16, flexShrink: 0 }}>👥</div>
+              <div>
+                <div style={{ fontWeight: 600, fontSize: 13, color: '#1f2937' }}>Svi članovi</div>
+                <div style={{ fontSize: 11, color: '#9ca3af' }}>Grupni chat</div>
+              </div>
+            </div>
+          </div>
+
+          {/* Privatni threadovi */}
           {threads.map(t => (
-            <div key={t.id} onClick={() => setActiveThread(t.id)}
+            <div key={t.id} onClick={() => switchThread(t.id)}
               style={{ padding: '12px 16px', cursor: 'pointer', borderBottom: '1px solid #f3f4f6', background: activeThread === t.id ? '#f0fdf4' : 'white', borderLeft: activeThread === t.id ? '3px solid #247a4b' : '3px solid transparent' }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                <div style={{ width: 36, height: 36, borderRadius: '50%', background: t.id === 'group' ? '#247a4b' : '#dbeafe', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 16, flexShrink: 0 }}>
-                  {t.id === 'group' ? '👥' : t.is_group ? '👥' : t.name.charAt(0)}
+                <div style={{ width: 36, height: 36, borderRadius: '50%', background: '#dbeafe', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 18, flexShrink: 0 }}>
+                  {t.is_group ? '👥' : t.name.charAt(0)}
                 </div>
                 <div style={{ minWidth: 0 }}>
                   <div style={{ fontWeight: 600, fontSize: 13, color: '#1f2937', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{t.name}</div>
-                  {t.last_message && (
-                    <div style={{ fontSize: 11, color: '#9ca3af', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', marginTop: 1 }}>
-                      {t.last_message}
-                    </div>
-                  )}
-                  {t.last_at && (
-                    <div style={{ fontSize: 10, color: '#d1d5db', marginTop: 1 }}>
-                      {format(new Date(t.last_at), 'dd.MM. HH:mm', { locale: hr })}
-                    </div>
-                  )}
+                  <div style={{ fontSize: 11, color: '#9ca3af' }}>{t.is_group ? 'Grupni' : 'Privatni'}</div>
                 </div>
               </div>
             </div>
@@ -274,17 +238,16 @@ export default function ChatPage() {
 
       {/* Chat prozor */}
       <div style={{ flex: 1, display: 'flex', flexDirection: 'column', background: '#f8fafc' }}>
-        {/* Header */}
         <div style={{ background: 'white', borderBottom: '1px solid #e5e7eb', padding: '14px 20px', flexShrink: 0 }}>
           <h2 style={{ fontWeight: 700, fontSize: 15, margin: 0 }}>{activeThreadData?.name ?? 'Chat'}</h2>
           <p style={{ fontSize: 11, color: '#9ca3af', margin: '2px 0 0' }}>
-            {activeThread === 'group' ? 'Grupni chat — svi članovi' : activeThreadData?.is_group ? 'Grupni privatni chat' : 'Privatni razgovor'}
+            {activeThread === 'group' ? 'Grupni chat — svi članovi' : (activeThreadData as any)?.is_group ? 'Grupni privatni chat' : 'Privatni razgovor'}
           </p>
         </div>
 
-        {/* Poruke */}
         <div style={{ flex: 1, overflowY: 'auto', padding: '16px 20px', display: 'flex', flexDirection: 'column', gap: 8 }}>
-          {messages.length === 0 && (
+          {loading && <div style={{ textAlign: 'center', color: '#9ca3af', marginTop: 60 }}>Učitavam...</div>}
+          {!loading && messages.length === 0 && (
             <div style={{ textAlign: 'center', color: '#9ca3af', marginTop: 60 }}>
               <div style={{ fontSize: 40, marginBottom: 8 }}>💬</div>
               <p>Nema poruka. Pošalji prvu!</p>
@@ -344,9 +307,9 @@ export default function ChatPage() {
           <div ref={bottomRef} />
         </div>
 
-        {/* Input */}
         <div style={{ background: 'white', borderTop: '1px solid #e5e7eb', padding: '12px 16px', display: 'flex', gap: 10, alignItems: 'flex-end', flexShrink: 0 }}>
-          <textarea value={newMessage} onChange={e => setNewMessage(e.target.value)} onKeyDown={handleKeyDown}
+          <textarea value={newMessage} onChange={e => setNewMessage(e.target.value)}
+            onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage() } }}
             placeholder="Napiši poruku... (Enter = pošalji, Shift+Enter = novi red)"
             rows={1}
             style={{ flex: 1, border: '1px solid #e5e7eb', borderRadius: 12, padding: '10px 14px', fontSize: 14, resize: 'none', outline: 'none', fontFamily: 'inherit', maxHeight: 120, lineHeight: 1.5 }}
