@@ -34,6 +34,21 @@ for (let h = 0; h < 24; h++) {
   }
 }
 
+const emptyForm = () => {
+  const now = new Date()
+  const mins = Math.round(now.getMinutes() / 30) * 30
+  return {
+    species: '', quantity: 1, spol: 'Nepoznato', starost: 'Odraslo',
+    nacin_lova: 'Čeka', oruzje: '', municija: '',
+    masa_trupla: '', trofej_duzina: '', trofej_masa: '', trofej_cic: '',
+    temperatura: '', vjetar: 'Bez vjetra', vidljivost: 'Odlična',
+    poi_id: '', notes: '',
+    datum: now.toISOString().slice(0, 10),
+    vrijeme: `${now.getHours().toString().padStart(2,'0')}:${mins === 60 ? '00' : mins.toString().padStart(2,'0')}`,
+    sudionici: [] as string[],
+  }
+}
+
 export default function DnevnikPage() {
   const [entries, setEntries] = useState<any[]>([])
   const [pois, setPois] = useState<any[]>([])
@@ -41,20 +56,13 @@ export default function DnevnikPage() {
   const [showForm, setShowForm] = useState(false)
   const [groupId, setGroupId] = useState<string | null>(null)
   const [userId, setUserId] = useState<string | null>(null)
+  const [isAdmin, setIsAdmin] = useState(false)
   const [filter, setFilter] = useState('')
   const [filterType, setFilterType] = useState('')
   const [expandedId, setExpandedId] = useState<string | null>(null)
   const [entryType, setEntryType] = useState<EntryType>('odstrjel')
-  const [form, setForm] = useState({
-    species: '', quantity: 1, spol: 'Nepoznato', starost: 'Odraslo',
-    nacin_lova: 'Čeka', oruzje: '', municija: '',
-    masa_trupla: '', trofej_duzina: '', trofej_masa: '', trofej_cic: '',
-    temperatura: '', vjetar: 'Bez vjetra', vidljivost: 'Odlična',
-    poi_id: '', notes: '',
-    datum: new Date().toISOString().slice(0, 10),
-    vrijeme: `${new Date().getHours().toString().padStart(2,'0')}:${Math.round(new Date().getMinutes()/30)*30 === 60 ? '00' : (Math.round(new Date().getMinutes()/30)*30).toString().padStart(2,'0')}`,
-    sudionici: [] as string[],
-  })
+  const [editingEntry, setEditingEntry] = useState<any | null>(null)
+  const [form, setForm] = useState(emptyForm())
   const supabase = createClient()
 
   useEffect(() => { load() }, [])
@@ -63,9 +71,11 @@ export default function DnevnikPage() {
     const { data: { user } } = await supabase.auth.getUser()
     if (!user) return
     setUserId(user.id)
-    const { data: member } = await supabase.from('group_members').select('group_id').eq('user_id', user.id).single()
+    const { data: member } = await supabase.from('group_members').select('group_id, role').eq('user_id', user.id).single()
     if (!member) return
     setGroupId(member.group_id)
+    setIsAdmin(member.role === 'admin')
+
     const [entriesRes, poisRes, lovciRes] = await Promise.all([
       supabase.from('entries').select('*, profiles(full_name), poi(name)')
         .eq('group_id', member.group_id).order('hunted_at', { ascending: false }),
@@ -77,20 +87,50 @@ export default function DnevnikPage() {
     setLovci(lovciRes.data ?? [])
   }
 
-  function resetForm() {
-    const now = new Date()
-    const mins = Math.round(now.getMinutes() / 30) * 30
-    setForm({
-      species: '', quantity: 1, spol: 'Nepoznato', starost: 'Odraslo',
-      nacin_lova: 'Čeka', oruzje: '', municija: '',
-      masa_trupla: '', trofej_duzina: '', trofej_masa: '', trofej_cic: '',
-      temperatura: '', vjetar: 'Bez vjetra', vidljivost: 'Odlična',
-      poi_id: '', notes: '',
-      datum: now.toISOString().slice(0, 10),
-      vrijeme: `${now.getHours().toString().padStart(2,'0')}:${mins === 60 ? '00' : mins.toString().padStart(2,'0')}`,
-      sudionici: [],
-    })
+  function openNew() {
+    setEditingEntry(null)
+    setForm(emptyForm())
     setEntryType('odstrjel')
+    setShowForm(true)
+  }
+
+  function openEdit(entry: any) {
+    setEditingEntry(entry)
+    const d = new Date(entry.hunted_at)
+    const mins = d.getMinutes()
+    const roundedMins = Math.round(mins / 30) * 30 === 60 ? '00' : Math.round(mins / 30) * 30
+    setForm({
+      species: entry.species === '-' ? '' : entry.species ?? '',
+      quantity: entry.quantity ?? 1,
+      spol: entry.spol ?? 'Nepoznato',
+      starost: entry.starost ?? 'Odraslo',
+      nacin_lova: entry.nacin_lova ?? 'Čeka',
+      oruzje: entry.oruzje ?? '',
+      municija: entry.municija ?? '',
+      masa_trupla: entry.masa_trupla?.toString() ?? '',
+      trofej_duzina: entry.trofej_duzina?.toString() ?? '',
+      trofej_masa: entry.trofej_masa?.toString() ?? '',
+      trofej_cic: entry.trofej_cic?.toString() ?? '',
+      temperatura: entry.temperatura?.toString() ?? '',
+      vjetar: entry.vjetar ?? 'Bez vjetra',
+      vidljivost: entry.vidljivost ?? 'Odlična',
+      poi_id: entry.poi_id ?? '',
+      notes: entry.notes ?? '',
+      datum: d.toISOString().slice(0, 10),
+      vrijeme: `${d.getHours().toString().padStart(2,'0')}:${roundedMins.toString().padStart(2,'0')}`,
+      sudionici: entry.sudionici ?? [],
+    })
+    setEntryType(entry.type as EntryType)
+    setShowForm(true)
+  }
+
+  async function deleteEntry(id: string) {
+    if (!confirm('Obriši ovaj unos?')) return
+    const { error } = await supabase.from('entries').delete().eq('id', id)
+    if (error) { toast.error('Greška pri brisanju'); return }
+    toast.success('Unos obrisan!')
+    setEntries(e => e.filter(e => e.id !== id))
+    if (expandedId === id) setExpandedId(null)
   }
 
   async function saveEntry() {
@@ -99,9 +139,9 @@ export default function DnevnikPage() {
       return
     }
     if (!groupId || !userId) return
+
     const hunted_at = new Date(`${form.datum}T${form.vrijeme}:00`).toISOString()
-    const { error } = await supabase.from('entries').insert({
-      group_id: groupId, user_id: userId,
+    const payload = {
       type: entryType,
       species: form.species || '-',
       quantity: form.quantity,
@@ -119,11 +159,21 @@ export default function DnevnikPage() {
       notes: form.notes || null,
       hunted_at,
       sudionici: form.sudionici,
-    })
-    if (error) { toast.error('Greška pri unosu'); console.error(error); return }
-    toast.success('Unos dodan!')
+    }
+
+    if (editingEntry) {
+      const { error } = await supabase.from('entries').update(payload).eq('id', editingEntry.id)
+      if (error) { toast.error('Greška'); return }
+      toast.success('Unos ažuriran!')
+    } else {
+      const { error } = await supabase.from('entries').insert({ ...payload, group_id: groupId, user_id: userId })
+      if (error) { toast.error('Greška'); return }
+      toast.success('Unos dodan!')
+    }
+
     setShowForm(false)
-    resetForm()
+    setEditingEntry(null)
+    setForm(emptyForm())
     load()
   }
 
@@ -168,14 +218,12 @@ export default function DnevnikPage() {
         <div>
           <label className="text-xs text-gray-500 mb-1 block">Datum</label>
           <input type="date" value={form.datum}
-            onChange={e => setForm(f => ({...f, datum: e.target.value}))}
-            className={inputCls} />
+            onChange={e => setForm(f => ({...f, datum: e.target.value}))} className={inputCls} />
         </div>
         <div>
           <label className="text-xs text-gray-500 mb-1 block">Vrijeme</label>
           <select value={form.vrijeme}
-            onChange={e => setForm(f => ({...f, vrijeme: e.target.value}))}
-            className={inputCls}>
+            onChange={e => setForm(f => ({...f, vrijeme: e.target.value}))} className={inputCls}>
             {timeOptions.map(t => <option key={t} value={t}>{t}</option>)}
           </select>
         </div>
@@ -191,7 +239,7 @@ export default function DnevnikPage() {
           <button onClick={exportCSV} className="border border-gray-200 hover:bg-gray-50 text-gray-700 px-4 py-2 rounded-xl text-sm font-medium">
             📊 Izvoz CSV
           </button>
-          <button onClick={() => setShowForm(true)} className="bg-forest-600 hover:bg-forest-700 text-white px-4 py-2 rounded-xl text-sm font-medium">
+          <button onClick={openNew} className="bg-forest-600 hover:bg-forest-700 text-white px-4 py-2 rounded-xl text-sm font-medium">
             + Novi unos
           </button>
         </div>
@@ -236,12 +284,12 @@ export default function DnevnikPage() {
             <div className="px-6 py-12 text-center text-gray-400">Nema unosa</div>
           ) : filtered.map(entry => {
             const t = TYPES.find(t => t.key === entry.type) ?? TYPES[4]
+            const canEdit = isAdmin || entry.user_id === userId
             return (
               <div key={entry.id}>
-                <div className="px-6 py-4 flex items-start gap-4 cursor-pointer hover:bg-gray-50"
-                  onClick={() => setExpandedId(expandedId === entry.id ? null : entry.id)}>
-                  <span className="text-2xl mt-0.5">{t.icon}</span>
-                  <div className="flex-1 min-w-0">
+                <div className="px-6 py-4 flex items-start gap-4">
+                  <span className="text-2xl mt-0.5 cursor-pointer" onClick={() => setExpandedId(expandedId === entry.id ? null : entry.id)}>{t.icon}</span>
+                  <div className="flex-1 min-w-0 cursor-pointer" onClick={() => setExpandedId(expandedId === entry.id ? null : entry.id)}>
                     <div className="flex items-center gap-2 flex-wrap">
                       <span className="font-semibold text-gray-800">
                         {entry.type === 'rad' || entry.type === 'ostalo' ? t.label : entry.species}
@@ -257,14 +305,30 @@ export default function DnevnikPage() {
                       </span>
                     </div>
                     <p className="text-xs text-gray-500 mt-1">
-                      {format(new Date(entry.hunted_at), 'dd.MM.yyyy')} u {format(new Date(entry.hunted_at), 'HH:mm')}
+                      {format(new Date(entry.hunted_at), 'dd.MM.yyyy', { locale: hr })} u {format(new Date(entry.hunted_at), 'HH:mm')}
                       {' · '}{(entry.profiles as any)?.full_name}
                       {(entry.poi as any)?.name && ` · 📍 ${(entry.poi as any).name}`}
                     </p>
                     {entry.notes && <p className="text-xs text-gray-600 mt-1 truncate">{entry.notes}</p>}
                   </div>
-                  <span className="text-gray-400 text-xs">{expandedId === entry.id ? '▲' : '▼'}</span>
+                  {/* Edit/Delete gumbi */}
+                  {canEdit && (
+                    <div className="flex gap-1 flex-shrink-0">
+                      <button onClick={() => openEdit(entry)}
+                        className="p-1.5 text-gray-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors text-sm">
+                        ✏️
+                      </button>
+                      <button onClick={() => deleteEntry(entry.id)}
+                        className="p-1.5 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors text-sm">
+                        🗑
+                      </button>
+                    </div>
+                  )}
+                  <span className="text-gray-400 text-xs cursor-pointer" onClick={() => setExpandedId(expandedId === entry.id ? null : entry.id)}>
+                    {expandedId === entry.id ? '▲' : '▼'}
+                  </span>
                 </div>
+
                 {expandedId === entry.id && (
                   <div className="px-6 pb-4 pl-16">
                     <div className="grid grid-cols-2 md:grid-cols-3 gap-x-6 gap-y-1 text-sm">
@@ -299,8 +363,10 @@ export default function DnevnikPage() {
         <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
           <div className="bg-white rounded-2xl p-6 w-full max-w-xl shadow-2xl max-h-[90vh] overflow-y-auto">
             <div className="flex items-center justify-between mb-5">
-              <h3 className="font-semibold text-gray-800 text-lg">Novi unos</h3>
-              <button onClick={() => { setShowForm(false); resetForm() }} className="text-gray-400 hover:text-gray-600 text-xl">✕</button>
+              <h3 className="font-semibold text-gray-800 text-lg">
+                {editingEntry ? 'Uredi unos' : 'Novi unos'}
+              </h3>
+              <button onClick={() => { setShowForm(false); setEditingEntry(null) }} className="text-gray-400 hover:text-gray-600 text-xl">✕</button>
             </div>
 
             {/* Tip */}
@@ -362,23 +428,19 @@ export default function DnevnikPage() {
                   <div className="grid grid-cols-2 gap-3">
                     <div>
                       <label className={labelCls}>Oružje</label>
-                      <input value={form.oruzje} onChange={e => setForm(f => ({...f, oruzje: e.target.value}))}
-                        className={inputCls} placeholder="npr. Sauer 202 .308" />
+                      <input value={form.oruzje} onChange={e => setForm(f => ({...f, oruzje: e.target.value}))} className={inputCls} placeholder="npr. Sauer 202 .308" />
                     </div>
                     <div>
                       <label className={labelCls}>Municija</label>
-                      <input value={form.municija} onChange={e => setForm(f => ({...f, municija: e.target.value}))}
-                        className={inputCls} placeholder="npr. RWS 165gr" />
+                      <input value={form.municija} onChange={e => setForm(f => ({...f, municija: e.target.value}))} className={inputCls} placeholder="npr. RWS 165gr" />
                     </div>
                     <div>
                       <label className={labelCls}>Masa trupla (kg)</label>
-                      <input type="number" step="0.1" value={form.masa_trupla}
-                        onChange={e => setForm(f => ({...f, masa_trupla: e.target.value}))} className={inputCls} placeholder="0.0" />
+                      <input type="number" step="0.1" value={form.masa_trupla} onChange={e => setForm(f => ({...f, masa_trupla: e.target.value}))} className={inputCls} placeholder="0.0" />
                     </div>
                     <div>
                       <label className={labelCls}>Temperatura (°C)</label>
-                      <input type="number" step="0.1" value={form.temperatura}
-                        onChange={e => setForm(f => ({...f, temperatura: e.target.value}))} className={inputCls} placeholder="0.0" />
+                      <input type="number" step="0.1" value={form.temperatura} onChange={e => setForm(f => ({...f, temperatura: e.target.value}))} className={inputCls} placeholder="0.0" />
                     </div>
                     <div>
                       <label className={labelCls}>Vjetar</label>
@@ -399,21 +461,15 @@ export default function DnevnikPage() {
                       <div className="grid grid-cols-3 gap-3">
                         <div>
                           <label className="text-xs text-gray-600 mb-1 block">Dužina (cm)</label>
-                          <input type="number" step="0.1" value={form.trofej_duzina}
-                            onChange={e => setForm(f => ({...f, trofej_duzina: e.target.value}))}
-                            className="w-full border border-amber-200 rounded-lg px-2 py-2 text-sm focus:outline-none" placeholder="0.0" />
+                          <input type="number" step="0.1" value={form.trofej_duzina} onChange={e => setForm(f => ({...f, trofej_duzina: e.target.value}))} className="w-full border border-amber-200 rounded-lg px-2 py-2 text-sm" placeholder="0.0" />
                         </div>
                         <div>
                           <label className="text-xs text-gray-600 mb-1 block">Masa (kg)</label>
-                          <input type="number" step="0.01" value={form.trofej_masa}
-                            onChange={e => setForm(f => ({...f, trofej_masa: e.target.value}))}
-                            className="w-full border border-amber-200 rounded-lg px-2 py-2 text-sm focus:outline-none" placeholder="0.0" />
+                          <input type="number" step="0.01" value={form.trofej_masa} onChange={e => setForm(f => ({...f, trofej_masa: e.target.value}))} className="w-full border border-amber-200 rounded-lg px-2 py-2 text-sm" placeholder="0.0" />
                         </div>
                         <div>
                           <label className="text-xs text-gray-600 mb-1 block">CIC bodovi</label>
-                          <input type="number" step="0.01" value={form.trofej_cic}
-                            onChange={e => setForm(f => ({...f, trofej_cic: e.target.value}))}
-                            className="w-full border border-amber-200 rounded-lg px-2 py-2 text-sm focus:outline-none" placeholder="0.00" />
+                          <input type="number" step="0.01" value={form.trofej_cic} onChange={e => setForm(f => ({...f, trofej_cic: e.target.value}))} className="w-full border border-amber-200 rounded-lg px-2 py-2 text-sm" placeholder="0.00" />
                         </div>
                       </div>
                     </div>
@@ -434,8 +490,7 @@ export default function DnevnikPage() {
                     </div>
                     <div>
                       <label className={labelCls}>Broj primjeraka</label>
-                      <input type="number" min="1" value={form.quantity}
-                        onChange={e => setForm(f => ({...f, quantity: parseInt(e.target.value) || 1}))} className={inputCls} />
+                      <input type="number" min="1" value={form.quantity} onChange={e => setForm(f => ({...f, quantity: parseInt(e.target.value) || 1}))} className={inputCls} />
                     </div>
                     <div>
                       <label className={labelCls}>Spol</label>
@@ -480,8 +535,7 @@ export default function DnevnikPage() {
                     </div>
                     <div>
                       <label className={labelCls}>Ukupan odstrel</label>
-                      <input type="number" min="0" value={form.quantity}
-                        onChange={e => setForm(f => ({...f, quantity: parseInt(e.target.value) || 0}))} className={inputCls} />
+                      <input type="number" min="0" value={form.quantity} onChange={e => setForm(f => ({...f, quantity: parseInt(e.target.value) || 0}))} className={inputCls} />
                     </div>
                   </div>
                   <DateTimeFields />
@@ -563,7 +617,7 @@ export default function DnevnikPage() {
               <button onClick={saveEntry}
                 className="w-full text-white font-medium py-3 rounded-xl transition-colors"
                 style={{ background: TYPES.find(t => t.key === entryType)?.color }}>
-                Spremi unos
+                {editingEntry ? 'Spremi izmjene' : 'Spremi unos'}
               </button>
             </div>
           </div>
