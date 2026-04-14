@@ -14,6 +14,12 @@ const POI_ICONS: Record<string, string> = {
 type Mode = 'view' | 'draw_boundary' | 'add_poi' | 'edit_poi'
 type Tab = 'info' | 'rezervacije' | 'zadaci' | 'novi_zadatak'
 
+const timeOptions = Array.from({length: 48}, (_, i) => {
+  const h = Math.floor(i/2).toString().padStart(2,'0')
+  const m = i%2 === 0 ? '00' : '30'
+  return `${h}:${m}`
+})
+
 export default function KartaPage() {
   const mapContainer = useRef<HTMLDivElement>(null)
   const mapRef = useRef<any>(null)
@@ -37,7 +43,7 @@ export default function KartaPage() {
   const [areas, setAreas] = useState<any[]>([])
   const [isAdmin, setIsAdmin] = useState(false)
   const [showNewRes, setShowNewRes] = useState(false)
-  const [newRes, setNewRes] = useState({ date_start: '', date_end: '', notes: '' })
+  const [newRes, setNewRes] = useState({ datum_od: '', vrijeme_od: '06:00', datum_do: '', vrijeme_do: '12:00', notes: '' })
   const [noviZadatak, setNoviZadatak] = useState({ naslov: '', opis: '', zaduzeni_ids: [] as string[], prioritet: 'normalno', rok: '' })
   const modeRef = useRef<Mode>('view')
   const boundaryPointsRef = useRef<[number, number][]>([])
@@ -227,16 +233,22 @@ export default function KartaPage() {
   }
 
   async function createReservation() {
-    if (!newRes.date_start || !newRes.date_end || !selectedPOI || !groupId || !userId) return
+    if (!newRes.datum_od || !newRes.datum_do || !selectedPOI || !groupId || !userId) {
+      toast.error('Ispuni datum od i do!')
+      return
+    }
+    const date_start = new Date(`${newRes.datum_od}T${newRes.vrijeme_od}:00`).toISOString()
+    const date_end = new Date(`${newRes.datum_do}T${newRes.vrijeme_do}:00`).toISOString()
+    if (date_end <= date_start) { toast.error('Kraj mora biti nakon početka!'); return }
+
     const { error } = await supabase.from('reservations').insert({
       poi_id: selectedPOI.id, group_id: groupId, user_id: userId,
-      date_start: new Date(newRes.date_start).toISOString(),
-      date_end: new Date(newRes.date_end).toISOString(), notes: newRes.notes,
+      date_start, date_end, notes: newRes.notes,
     })
     if (error) { toast.error(error.code === '23505' ? 'Već rezervirano!' : 'Greška'); return }
     toast.success('Rezervacija kreirana!')
     setShowNewRes(false)
-    setNewRes({ date_start: '', date_end: '', notes: '' })
+    setNewRes({ datum_od: '', vrijeme_od: '06:00', datum_do: '', vrijeme_do: '12:00', notes: '' })
     const { data } = await supabase.from('reservations').select('*, profiles(full_name)').eq('poi_id', selectedPOI.id).eq('status', 'aktivna').gte('date_end', new Date().toISOString()).order('date_start')
     setPoiReservations(data ?? [])
     const updatedAll = [...allReservations, ...(data ?? [])]
@@ -267,7 +279,6 @@ export default function KartaPage() {
     })
     if (error) { toast.error('Greška'); return }
 
-    // Pošalji email obavijest zaduženim lovcima
     const zaduzeniLovci = lovci.filter(l => noviZadatak.zaduzeni_ids.includes(l.id))
     for (const lovac of zaduzeniLovci) {
       if (lovac.email) {
@@ -275,18 +286,15 @@ export default function KartaPage() {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            email: lovac.email,
-            ime: lovac.full_name,
-            poi_naziv: selectedPOI.name,
-            zadatak: noviZadatak.naslov,
-            opis: noviZadatak.opis,
-            rok: noviZadatak.rok,
+            email: lovac.email, ime: lovac.full_name,
+            poi_naziv: selectedPOI.name, zadatak: noviZadatak.naslov,
+            opis: noviZadatak.opis, rok: noviZadatak.rok,
           })
-        }).catch(() => {}) // ne blokiraj ako email ne uspije
+        }).catch(() => {})
       }
     }
 
-    toast.success('Zadatak kreiran!' + (zaduzeniLovci.filter(l => l.email).length > 0 ? ' Email obavijest poslana.' : ''))
+    toast.success('Zadatak kreiran!')
     setNoviZadatak({ naslov: '', opis: '', zaduzeni_ids: [], prioritet: 'normalno', rok: '' })
     setTab('zadaci')
     const { data } = await supabase.from('poi_zadaci').select('*').eq('poi_id', selectedPOI.id).order('created_at', { ascending: false })
@@ -324,7 +332,6 @@ export default function KartaPage() {
     if (previewPolyRef.current) { mapRef.current?.removeLayer(previewPolyRef.current); previewPolyRef.current = null }
   }
 
-  const PRIORITET_COLOR: Record<string, string> = { hitno: '#DC2626', visoko: '#F97316', normalno: '#6B7280', nisko: '#9CA3AF' }
   const tabBtn = (t: Tab, label: string) => (
     <button onClick={() => setTab(t)} style={{ padding: '5px 10px', fontSize: 11, border: 'none', cursor: 'pointer', borderRadius: 6, background: tab === t ? '#247a4b' : '#f3f4f6', color: tab === t ? 'white' : '#374151', fontWeight: tab === t ? 600 : 400 }}>
       {label}
@@ -407,7 +414,6 @@ export default function KartaPage() {
         {/* POI Panel */}
         {selectedPOI && mode === 'view' && (
           <div style={{ position: 'absolute', bottom: 16, right: 16, background: 'white', borderRadius: 16, width: 320, zIndex: 1000, boxShadow: '0 4px 20px rgba(0,0,0,0.15)', maxHeight: '78vh', display: 'flex', flexDirection: 'column' }}>
-            {/* Header */}
             <div style={{ padding: '14px 18px 10px', borderBottom: '1px solid #e5e7eb', flexShrink: 0 }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 8 }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
@@ -430,7 +436,6 @@ export default function KartaPage() {
               </div>
             </div>
 
-            {/* Body */}
             <div style={{ padding: '12px 18px', overflowY: 'auto', flex: 1 }}>
 
               {/* INFO */}
@@ -487,26 +492,59 @@ export default function KartaPage() {
                       {showNewRes ? 'Zatvori' : '+ Nova rezervacija'}
                     </button>
                   </div>
+
                   {showNewRes && (
                     <div style={{ background: '#f8fafc', borderRadius: 10, padding: 12, marginBottom: 12 }}>
-                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6, marginBottom: 6 }}>
-                        <div>
-                          <label style={{ fontSize: 11, color: '#374151', display: 'block', marginBottom: 2 }}>Od</label>
-                          <input type="datetime-local" value={newRes.date_start} onChange={e => setNewRes(r => ({...r, date_start: e.target.value}))}
-                            style={{ width: '100%', border: '1px solid #e5e7eb', borderRadius: 6, padding: '5px 8px', fontSize: 11, boxSizing: 'border-box' }} />
+                      {/* OD */}
+                      <div style={{ marginBottom: 8 }}>
+                        <label style={{ fontSize: 11, fontWeight: 600, color: '#374151', display: 'block', marginBottom: 4 }}>Od</label>
+                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6 }}>
+                          <div>
+                            <label style={{ fontSize: 10, color: '#6b7280', display: 'block', marginBottom: 2 }}>Datum</label>
+                            <input type="date" value={newRes.datum_od}
+                              onChange={e => setNewRes(r => ({...r, datum_od: e.target.value}))}
+                              style={{ width: '100%', border: '1px solid #e5e7eb', borderRadius: 6, padding: '5px 8px', fontSize: 11, boxSizing: 'border-box' }} />
+                          </div>
+                          <div>
+                            <label style={{ fontSize: 10, color: '#6b7280', display: 'block', marginBottom: 2 }}>Vrijeme</label>
+                            <select value={newRes.vrijeme_od}
+                              onChange={e => setNewRes(r => ({...r, vrijeme_od: e.target.value}))}
+                              style={{ width: '100%', border: '1px solid #e5e7eb', borderRadius: 6, padding: '5px 8px', fontSize: 11 }}>
+                              {timeOptions.map(t => <option key={t} value={t}>{t}</option>)}
+                            </select>
+                          </div>
                         </div>
-                        <div>
-                          <label style={{ fontSize: 11, color: '#374151', display: 'block', marginBottom: 2 }}>Do</label>
-                          <input type="datetime-local" value={newRes.date_end} onChange={e => setNewRes(r => ({...r, date_end: e.target.value}))}
-                            style={{ width: '100%', border: '1px solid #e5e7eb', borderRadius: 6, padding: '5px 8px', fontSize: 11, boxSizing: 'border-box' }} />
+                      </div>
+                      {/* DO */}
+                      <div style={{ marginBottom: 8 }}>
+                        <label style={{ fontSize: 11, fontWeight: 600, color: '#374151', display: 'block', marginBottom: 4 }}>Do</label>
+                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6 }}>
+                          <div>
+                            <label style={{ fontSize: 10, color: '#6b7280', display: 'block', marginBottom: 2 }}>Datum</label>
+                            <input type="date" value={newRes.datum_do}
+                              onChange={e => setNewRes(r => ({...r, datum_do: e.target.value}))}
+                              style={{ width: '100%', border: '1px solid #e5e7eb', borderRadius: 6, padding: '5px 8px', fontSize: 11, boxSizing: 'border-box' }} />
+                          </div>
+                          <div>
+                            <label style={{ fontSize: 10, color: '#6b7280', display: 'block', marginBottom: 2 }}>Vrijeme</label>
+                            <select value={newRes.vrijeme_do}
+                              onChange={e => setNewRes(r => ({...r, vrijeme_do: e.target.value}))}
+                              style={{ width: '100%', border: '1px solid #e5e7eb', borderRadius: 6, padding: '5px 8px', fontSize: 11 }}>
+                              {timeOptions.map(t => <option key={t} value={t}>{t}</option>)}
+                            </select>
+                          </div>
                         </div>
                       </div>
                       <input value={newRes.notes} onChange={e => setNewRes(r => ({...r, notes: e.target.value}))}
                         style={{ width: '100%', border: '1px solid #e5e7eb', borderRadius: 6, padding: '5px 8px', fontSize: 11, marginBottom: 6, boxSizing: 'border-box' }}
                         placeholder="Napomena..." />
-                      <button onClick={createReservation} style={{ width: '100%', background: '#247a4b', color: 'white', border: 'none', borderRadius: 6, padding: '7px', fontSize: 12, cursor: 'pointer', fontWeight: 500 }}>Rezerviraj</button>
+                      <button onClick={createReservation}
+                        style={{ width: '100%', background: '#247a4b', color: 'white', border: 'none', borderRadius: 6, padding: '7px', fontSize: 12, cursor: 'pointer', fontWeight: 500 }}>
+                        Rezerviraj
+                      </button>
                     </div>
                   )}
+
                   {poiReservations.length === 0 ? (
                     <div style={{ textAlign: 'center', color: '#9ca3af', fontSize: 13, padding: '16px 0' }}>Nema aktivnih rezervacija</div>
                   ) : poiReservations.map(res => (
@@ -515,7 +553,9 @@ export default function KartaPage() {
                         <div>
                           <div style={{ fontSize: 13, fontWeight: 600, color: '#15803d' }}>{(res.profiles as any)?.full_name}</div>
                           <div style={{ fontSize: 11, color: '#4b5563', marginTop: 2 }}>
-                            {format(parseISO(res.date_start), 'dd.MM.yyyy HH:mm', { locale: hr })} → {format(parseISO(res.date_end), 'HH:mm dd.MM', { locale: hr })}
+                            {format(parseISO(res.date_start), 'dd.MM.yyyy', { locale: hr })} u {format(parseISO(res.date_start), 'HH:mm')}
+                            {' → '}
+                            {format(parseISO(res.date_end), 'dd.MM.yyyy', { locale: hr })} u {format(parseISO(res.date_end), 'HH:mm')}
                           </div>
                           {res.notes && <div style={{ fontSize: 11, color: '#6b7280', marginTop: 2 }}>{res.notes}</div>}
                         </div>
@@ -552,7 +592,7 @@ export default function KartaPage() {
                     <label style={{ fontSize: 11, fontWeight: 600, color: '#374151', display: 'block', marginBottom: 3 }}>Opis</label>
                     <textarea value={noviZadatak.opis} onChange={e => setNoviZadatak(n => ({...n, opis: e.target.value}))}
                       style={{ width: '100%', border: '1px solid #e5e7eb', borderRadius: 8, padding: '8px 12px', fontSize: 13, boxSizing: 'border-box', resize: 'none' }}
-                      rows={2} placeholder="Detalji zadatka..." />
+                      rows={2} placeholder="Detalji..." />
                   </div>
                   <div>
                     <label style={{ fontSize: 11, fontWeight: 600, color: '#374151', display: 'block', marginBottom: 3 }}>Zaduženi lovci</label>
@@ -660,7 +700,7 @@ function ZadatakKartica({ zadatak, lovci, userId, isAdmin, onZatvori }: any) {
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 4 }}>
         <div style={{ fontWeight: 600, fontSize: 13, flex: 1 }}>{zadatak.naslov}</div>
         <span style={{ fontSize: 10, color: PRIORITET_COLOR[zadatak.prioritet], fontWeight: 600, marginLeft: 8, flexShrink: 0 }}>
-          {zadatak.prioritet.toUpperCase()}
+          {zadatak.prioritet?.toUpperCase()}
         </span>
       </div>
       {zadatak.opis && <p style={{ fontSize: 12, color: '#4b5563', margin: '4px 0' }}>{zadatak.opis}</p>}
