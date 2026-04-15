@@ -113,14 +113,14 @@ export default function ProfilPage() {
   const labelCls = "text-sm font-medium text-gray-700 mb-1 block"
 
   const fields = [
-    { key: 'full_name',    label: 'Ime i prezime',                    type: 'text',  full: true },
-    { key: 'email',        label: 'Email',                            type: 'email', disabled: true },
-    { key: 'phone',        label: 'Mobitel',                          type: 'tel' },
-    { key: 'address',      label: 'Adresa',                           type: 'text',  full: true },
-    { key: 'li_broj',      label: 'LI broj (lovačka iskaznica)',      type: 'text' },
-    { key: 'ol_brojevi',   label: 'OL brojevi (odvojeni zarezom)',    type: 'text' },
-    { key: 'date_of_birth', label: 'Datum rođenja',                   type: 'date' },
-    { key: 'member_since', label: 'Član od',                          type: 'date' },
+    { key: 'full_name',     label: 'Ime i prezime',                 type: 'text',  full: true },
+    { key: 'email',         label: 'Email',                         type: 'email', disabled: true },
+    { key: 'phone',         label: 'Mobitel',                       type: 'tel' },
+    { key: 'address',       label: 'Adresa',                        type: 'text',  full: true },
+    { key: 'li_broj',       label: 'LI broj (lovačka iskaznica)',   type: 'text' },
+    { key: 'ol_brojevi',    label: 'OL brojevi (odvojeni zarezom)', type: 'text' },
+    { key: 'date_of_birth', label: 'Datum rođenja',                 type: 'date' },
+    { key: 'member_since',  label: 'Član od',                       type: 'date' },
   ]
 
   if (loading) return <div className="p-6 text-center text-gray-400">Učitavam...</div>
@@ -145,13 +145,13 @@ export default function ProfilPage() {
         )}
       </div>
 
-      {/* Lista članova (samo admin) */}
+      {/* Lista članova */}
       {isAdmin && view === 'list' && (
         <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
           <div className="px-6 py-3 border-b border-gray-100 text-xs text-gray-400 font-medium">
             {members.length} članova
           </div>
-          {members.map((m, i) => {
+          {members.map(m => {
             const prof = m.profiles
             const roleColor = ROLE_COLOR[m.role] ?? ROLE_COLOR.gost
             return (
