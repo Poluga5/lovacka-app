@@ -46,7 +46,11 @@ for (let h = 0; h < 24; h++) {
   }
 }
 
-const currentYear = new Date().getFullYear()
+function getlovnaGodina(): number {
+  const d = new Date()
+  return d.getMonth() < 3 ? d.getFullYear() - 1 : d.getFullYear()
+}
+const lovnaGodina = getlovnaGodina()
 
 const emptyForm = () => {
   const now = new Date()
@@ -105,13 +109,8 @@ export default function DnevnikPage() {
 
   function handleSpeciesChange(species: string) {
     const markica = MARKICE[species]
-    const prefix = markica ? `RH-${markica.kratica}-${currentYear}-` : ''
-    setForm(f => ({
-      ...f,
-      species,
-      // Auto-fill samo ako je polje prazno ili ima stari prefix
-      markica_broj: prefix,
-    }))
+    const prefix = markica ? `RH-${markica.kratica}-${lovnaGodina}-` : ''
+    setForm(f => ({ ...f, species, markica_broj: prefix }))
   }
 
   function openNew() {
@@ -424,7 +423,6 @@ export default function DnevnikPage() {
             </div>
 
             <div className="space-y-4">
-
               {/* ODSTRJEL */}
               {entryType === 'odstrjel' && (
                 <>
@@ -455,7 +453,7 @@ export default function DnevnikPage() {
                     </div>
                   </div>
 
-                  {/* MARKICA — odmah nakon vrste, samo za krupnu divljač */}
+                  {/* MARKICA — odmah nakon vrste */}
                   {showMarkica && (
                     <div className="bg-blue-50 rounded-xl p-4 border border-blue-100">
                       <div className="flex items-center justify-between mb-3">
@@ -477,12 +475,15 @@ export default function DnevnikPage() {
                       </div>
                       <div className="grid grid-cols-2 gap-3">
                         <div>
-                          <label className="text-xs text-gray-600 mb-1 block">Serijski broj markice</label>
+                          <label className="text-xs text-gray-600 mb-1 block">
+                            Serijski broj markice
+                            <span className="text-gray-400 ml-1">(lovna god. {lovnaGodina}/{lovnaGodina+1})</span>
+                          </label>
                           <input
                             value={form.markica_broj}
                             onChange={e => setForm(f => ({...f, markica_broj: e.target.value}))}
                             className="w-full border border-blue-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400"
-                            placeholder={`RH-${markicaInfo?.kratica}-${currentYear}-000000`}
+                            placeholder={`RH-${markicaInfo?.kratica}-${lovnaGodina}-000000`}
                           />
                         </div>
                         <div>
