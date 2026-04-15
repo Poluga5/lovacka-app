@@ -8,7 +8,7 @@ import toast from 'react-hot-toast'
 const VRSTE_DIVLJACI = [
   'Srna obična', 'Jelen obični', 'Divlja svinja', 'Jelen lopatar', 'Muflon', 'Divokoza',
   'Smeđi medvjed', 'Jelen aksis', 'Zec', 'Fazan', 'Patka', 'Divlja guska',
-  'Lisica', 'Čagalj', 'Jazavac', 'Kuna', 'Tvor', 'Vrana', 'Svraka', 'Šojka',
+  'Lisica', 'Jazavac', 'Kuna', 'Tvor', 'Vrana', 'Svraka', 'Šojka',
   'Golub divlji', 'Prepelica', 'Šljuka', 'Bekasina', 'Ostalo'
 ]
 
@@ -23,7 +23,7 @@ const MARKICE: Record<string, { boja: string, kratica: string, bg: string, text:
   'Jelen aksis':    { boja: 'Smeđa',      kratica: 'JA', bg: '#92400E', text: 'white' },
 }
 
-const NACIN_LOVA = ['Čeka', 'Prikrada', 'Potjera', 'Izgon', 'Skupni lov', 'Hrt', 'Ostalo']
+const NACIN_LOVA = ['Čeka', 'Prikrada', 'Potjera', 'Izgon', 'Hrt', 'Ostalo']
 const VJETAR = ['Bez vjetra', 'Slab', 'Umjeren', 'Jak']
 const VIDLJIVOST = ['Odlična', 'Dobra', 'Slaba', 'Magla']
 const SPOL = ['Muško', 'Žensko', 'Nepoznato']
@@ -52,27 +52,29 @@ function getlovnaGodina(): number {
 }
 const lovnaGodina = getlovnaGodina()
 
-// Vrsta u skupnom lovu
-type VrstaOdstrjela = {
+// Stavka odstrjela u skupnom lovu
+type SkupniStavka = {
   id: string
   species: string
-  quantity: number
   spol: string
   starost: string
+  strijelac_id: string
   markica_broj: string
   markica_dodijeljena: boolean
   markica_datum: string
+  masa_trupla: string
 }
 
-const emptyVrsta = (): VrstaOdstrjela => ({
+const novaSkupnaStavka = (): SkupniStavka => ({
   id: Math.random().toString(36).slice(2),
   species: '',
-  quantity: 1,
   spol: 'Nepoznato',
   starost: 'Odraslo',
+  strijelac_id: '',
   markica_broj: '',
   markica_dodijeljena: false,
   markica_datum: new Date().toISOString().slice(0, 10),
+  masa_trupla: '',
 })
 
 const emptyForm = () => {
@@ -89,7 +91,7 @@ const emptyForm = () => {
     markica_broj: '',
     markica_dodijeljena: false,
     markica_datum: now.toISOString().slice(0, 10),
-    vrste_odstrjela: [emptyVrsta()] as VrstaOdstrjela[],
+    skupni_stavke: [novaSkupnaStavka()] as SkupniStavka[],
   }
 }
 
@@ -119,6 +121,7 @@ export default function DnevnikPage() {
     if (!member) return
     setGroupId(member.group_id)
     setIsAdmin(member.role === 'admin')
+
     const [entriesRes, poisRes, lovciRes] = await Promise.all([
       supabase.from('entries').select('*, profiles(full_name), poi(name)')
         .eq('group_id', member.group_id).order('hunted_at', { ascending: false }),
@@ -136,28 +139,15 @@ export default function DnevnikPage() {
     setForm(f => ({ ...f, species, markica_broj: prefix }))
   }
 
-  function updateVrsta(id: string, field: keyof VrstaOdstrjela, value: any) {
+  function handleSkupniSpeciesChange(id: string, species: string) {
+    const markica = MARKICE[species]
+    const prefix = markica ? `RH-${markica.kratica}-${lovnaGodina}-` : ''
     setForm(f => ({
       ...f,
-      vrste_odstrjela: f.vrste_odstrjela.map(v => {
-        if (v.id !== id) return v
-        const updated = { ...v, [field]: value }
-        // Auto-fill markice kad se odabere vrsta
-        if (field === 'species') {
-          const markica = MARKICE[value as string]
-          updated.markica_broj = markica ? `RH-${markica.kratica}-${lovnaGodina}-` : ''
-        }
-        return updated
-      })
+      skupni_stavke: f.skupni_stavke.map(s =>
+        s.id === id ? { ...s, species, markica_broj: prefix } : s
+      )
     }))
-  }
-
-  function addVrsta() {
-    setForm(f => ({ ...f, vrste_odstrjela: [...f.vrste_odstrjela, emptyVrsta()] }))
-  }
-
-  function removeVrsta(id: string) {
-    setForm(f => ({ ...f, vrste_odstrjela: f.vrste_odstrjela.filter(v => v.id !== id) }))
   }
 
   function openNew() {
@@ -171,9 +161,6 @@ export default function DnevnikPage() {
     setEditingEntry(entry)
     const d = new Date(entry.hunted_at)
     const mins = Math.round(d.getMinutes() / 30) * 30
-    const vrste = entry.vrste_odstrjela
-      ? entry.vrste_odstrjela.map((v: any) => ({ ...v, id: Math.random().toString(36).slice(2) }))
-      : [emptyVrsta()]
     setForm({
       species: entry.species === '-' ? '' : entry.species ?? '',
       quantity: entry.quantity ?? 1,
@@ -194,7 +181,7 @@ export default function DnevnikPage() {
       markica_broj: entry.markica_broj ?? '',
       markica_dodijeljena: entry.markica_dodijeljena ?? false,
       markica_datum: entry.markica_datum ? new Date(entry.markica_datum).toISOString().slice(0, 10) : new Date().toISOString().slice(0, 10),
-      vrste_odstrjela: vrste,
+      skupni_stavke: entry.skupni_stavke ?? [novaSkupnaStavka()],
     })
     setEntryType(entry.type as EntryType)
     setShowForm(true)
@@ -214,26 +201,21 @@ export default function DnevnikPage() {
       toast.error('Vrsta divljači je obavezna!')
       return
     }
-    if (entryType === 'skupni_lov' && form.vrste_odstrjela.some(v => !v.species)) {
-      toast.error('Odaberi vrstu za sve retke!')
+    if (entryType === 'skupni_lov' && form.skupni_stavke.some(s => !s.species)) {
+      toast.error('Svaka stavka mora imati vrstu divljači!')
       return
     }
     if (!groupId || !userId) return
 
     const hunted_at = new Date(`${form.datum}T${form.vrijeme}:00`).toISOString()
-    const ukupnoKolicina = entryType === 'skupni_lov'
-      ? form.vrste_odstrjela.reduce((a, v) => a + v.quantity, 0)
-      : form.quantity
-
     const payload: any = {
       type: entryType,
       species: entryType === 'skupni_lov'
-        ? form.vrste_odstrjela.map(v => v.species).join(', ')
+        ? form.skupni_stavke.map(s => s.species).join(', ')
         : form.species || '-',
-      quantity: ukupnoKolicina,
-      spol: form.spol,
-      starost: form.starost,
-      nacin_lova: entryType === 'skupni_lov' ? 'Skupni lov' : form.nacin_lova,
+      quantity: entryType === 'skupni_lov' ? form.skupni_stavke.length : form.quantity,
+      spol: form.spol, starost: form.starost,
+      nacin_lova: form.nacin_lova,
       oruzje: form.oruzje || null,
       municija: form.municija || null,
       masa_trupla: form.masa_trupla ? parseFloat(form.masa_trupla) : null,
@@ -242,21 +224,13 @@ export default function DnevnikPage() {
       poi_id: form.poi_id || null,
       notes: form.notes || null,
       hunted_at,
-      sudionici: form.sudionici,
+      sudionici: entryType === 'skupni_lov'
+        ? form.skupni_stavke.map(s => lovci.find(l => l.id === s.strijelac_id)?.full_name).filter(Boolean)
+        : form.sudionici,
       markica_broj: form.markica_broj || null,
       markica_dodijeljena: form.markica_dodijeljena,
       markica_datum: form.markica_datum ? new Date(form.markica_datum).toISOString() : null,
-      vrste_odstrjela: entryType === 'skupni_lov'
-        ? form.vrste_odstrjela.map(v => ({
-            species: v.species,
-            quantity: v.quantity,
-            spol: v.spol,
-            starost: v.starost,
-            markica_broj: v.markica_broj || null,
-            markica_dodijeljena: v.markica_dodijeljena,
-            markica_datum: v.markica_datum || null,
-          }))
-        : null,
+      skupni_stavke: entryType === 'skupni_lov' ? form.skupni_stavke : null,
     }
 
     if (editingEntry) {
@@ -268,6 +242,7 @@ export default function DnevnikPage() {
       if (error) { toast.error('Greška'); console.error(error); return }
       toast.success('Unos dodan!')
     }
+
     setShowForm(false)
     setEditingEntry(null)
     setForm(emptyForm())
@@ -278,7 +253,7 @@ export default function DnevnikPage() {
     const headers = ['Datum', 'Vrijeme', 'Tip', 'Vrsta', 'Količina', 'Spol', 'Starost',
       'Način lova', 'Lokacija', 'Oružje', 'Municija', 'Masa (kg)',
       'Temp (°C)', 'Vjetar', 'Vidljivost', 'Markica br.', 'Markica dodijeljena',
-      'Datum markice', 'Lovac', 'Bilješka']
+      'Datum markice', 'Lovac/Sudionici', 'Bilješka']
     const rows = entries.map(e => [
       format(new Date(e.hunted_at), 'dd.MM.yyyy'),
       format(new Date(e.hunted_at), 'HH:mm'),
@@ -288,7 +263,8 @@ export default function DnevnikPage() {
       e.temperatura ?? '', e.vjetar ?? '', e.vidljivost ?? '',
       e.markica_broj ?? '', e.markica_dodijeljena ? 'Da' : 'Ne',
       e.markica_datum ? format(new Date(e.markica_datum), 'dd.MM.yyyy') : '',
-      (e.profiles as any)?.full_name ?? '', e.notes ?? ''
+      (e.profiles as any)?.full_name ?? '',
+      e.notes ?? ''
     ])
     const csv = [headers, ...rows].map(r => r.join(';')).join('\n')
     const blob = new Blob(['\uFEFF' + csv], { type: 'text/csv;charset=utf-8;' })
@@ -301,6 +277,7 @@ export default function DnevnikPage() {
 
   const markicaInfo = MARKICE[form.species]
   const showMarkica = entryType === 'odstrjel' && !!markicaInfo
+
   const filtered = entries.filter(e =>
     (!filter || e.species?.toLowerCase().includes(filter.toLowerCase()) ||
       (e.profiles as any)?.full_name?.toLowerCase().includes(filter.toLowerCase())) &&
@@ -311,56 +288,72 @@ export default function DnevnikPage() {
   const inputCls = "w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-forest-500"
   const labelCls = "text-sm font-medium text-gray-700 mb-1 block"
 
+  const SectionTitle = ({ children }: { children: React.ReactNode }) => (
+    <div className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-3 mt-4 pb-1 border-b border-gray-100">
+      {children}
+    </div>
+  )
+
   const DateTimeFields = () => (
-    <div>
-      <label className={labelCls}>Datum i vrijeme</label>
-      <div className="grid grid-cols-2 gap-3">
-        <div>
-          <label className="text-xs text-gray-500 mb-1 block">Datum</label>
-          <input type="date" value={form.datum} onChange={e => setForm(f => ({...f, datum: e.target.value}))} className={inputCls} />
-        </div>
-        <div>
-          <label className="text-xs text-gray-500 mb-1 block">Vrijeme</label>
-          <select value={form.vrijeme} onChange={e => setForm(f => ({...f, vrijeme: e.target.value}))} className={inputCls}>
-            {timeOptions.map(t => <option key={t} value={t}>{t}</option>)}
-          </select>
-        </div>
+    <div className="grid grid-cols-2 gap-4">
+      <div>
+        <label className={labelCls}>Datum</label>
+        <input type="date" value={form.datum} onChange={e => setForm(f => ({...f, datum: e.target.value}))} className={inputCls} />
+      </div>
+      <div>
+        <label className={labelCls}>Vrijeme</label>
+        <select value={form.vrijeme} onChange={e => setForm(f => ({...f, vrijeme: e.target.value}))} className={inputCls}>
+          {timeOptions.map(t => <option key={t} value={t}>{t}</option>)}
+        </select>
       </div>
     </div>
   )
 
-  const MarkicaPolje = ({ vrsta, onChange }: { vrsta: VrstaOdstrjela, onChange: (field: keyof VrstaOdstrjela, value: any) => void }) => {
-    const m = MARKICE[vrsta.species]
-    if (!m) return null
+  const MarkicaBlock = ({ species, markicaBroj, markicaDodijeljena, markicaDatum, onChange }: {
+    species: string
+    markicaBroj: string
+    markicaDodijeljena: boolean
+    markicaDatum: string
+    onChange: (key: string, val: any) => void
+  }) => {
+    const info = MARKICE[species]
+    if (!info) return null
     return (
-      <div className="bg-blue-50 rounded-xl p-3 border border-blue-100 mt-2">
-        <div className="flex items-center justify-between mb-2">
+      <div className="bg-blue-50 rounded-xl p-4 border border-blue-100">
+        <div className="flex items-center justify-between mb-3">
           <div className="flex items-center gap-2">
-            <span className="text-xs font-semibold text-blue-900">🏷️ Markica</span>
-            <span className="text-xs px-2 py-0.5 rounded-full font-semibold" style={{ background: m.bg, color: m.text }}>
-              {m.boja} · {m.kratica}
+            <span className="text-sm font-semibold text-blue-900">🏷️ Evidencijska markica</span>
+            <span className="text-xs px-2 py-0.5 rounded-full font-semibold"
+              style={{ background: info.bg, color: info.text }}>
+              {info.boja} · {info.kratica}
             </span>
+            <span className="text-xs text-gray-400">lovna god. {lovnaGodina}/{lovnaGodina+1}</span>
           </div>
-          <label className="flex items-center gap-1 cursor-pointer select-none">
-            <span className="text-xs text-blue-700">Dodijeljena</span>
-            <div onClick={() => onChange('markica_dodijeljena', !vrsta.markica_dodijeljena)}
-              className={`w-9 h-5 rounded-full flex items-center px-0.5 cursor-pointer transition-colors ${vrsta.markica_dodijeljena ? 'bg-blue-600' : 'bg-gray-300'}`}>
-              <div className={`w-4 h-4 rounded-full bg-white shadow transition-transform ${vrsta.markica_dodijeljena ? 'translate-x-4' : 'translate-x-0'}`} />
+          <label className="flex items-center gap-2 cursor-pointer select-none">
+            <span className="text-xs text-blue-700 font-medium">Dodijeljena</span>
+            <div onClick={() => onChange('markica_dodijeljena', !markicaDodijeljena)}
+              className={`w-11 h-6 rounded-full transition-colors cursor-pointer flex items-center px-1 ${markicaDodijeljena ? 'bg-blue-600' : 'bg-gray-300'}`}>
+              <div className={`w-4 h-4 rounded-full bg-white shadow transition-transform ${markicaDodijeljena ? 'translate-x-5' : 'translate-x-0'}`} />
             </div>
           </label>
         </div>
-        <div className="grid grid-cols-2 gap-2">
-          <input value={vrsta.markica_broj}
-            onChange={e => onChange('markica_broj', e.target.value)}
-            className="w-full border border-blue-200 rounded-lg px-2 py-1.5 text-xs focus:outline-none"
-            placeholder={`RH-${m.kratica}-${lovnaGodina}-000000`} />
-          <input type="date" value={vrsta.markica_datum}
-            onChange={e => onChange('markica_datum', e.target.value)}
-            className="w-full border border-blue-200 rounded-lg px-2 py-1.5 text-xs focus:outline-none" />
+        <div className="grid grid-cols-2 gap-3">
+          <div>
+            <label className="text-xs text-gray-600 mb-1 block">Serijski broj markice</label>
+            <input value={markicaBroj} onChange={e => onChange('markica_broj', e.target.value)}
+              className="w-full border border-blue-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400"
+              placeholder={`RH-${info.kratica}-${lovnaGodina}-000000`} />
+          </div>
+          <div>
+            <label className="text-xs text-gray-600 mb-1 block">Datum dodjele</label>
+            <input type="date" value={markicaDatum} onChange={e => onChange('markica_datum', e.target.value)}
+              className="w-full border border-blue-200 rounded-lg px-3 py-2 text-sm focus:outline-none" />
+          </div>
         </div>
-        {!vrsta.markica_dodijeljena && (
-          <div className="mt-1.5 text-xs text-amber-700 bg-amber-100 rounded-lg p-1.5">
-            ⚠️ Krupna divljač mora biti označena markicom odmah nakon odstrela!
+        {!markicaDodijeljena && (
+          <div className="mt-2 text-xs text-amber-700 bg-amber-100 rounded-lg p-2 flex items-start gap-1">
+            <span>⚠️</span>
+            <span>Krupna divljač mora biti označena markicom odmah nakon odstrela, prije pomicanja s mjesta! (Pravilnik o potvrdi o podrijetlu divljači, NN)</span>
           </div>
         )}
       </div>
@@ -439,7 +432,7 @@ export default function DnevnikPage() {
                       {entry.quantity > 1 && entry.type !== 'rad' && (
                         <span className="text-xs bg-gray-100 text-gray-600 px-2 py-0.5 rounded-full">×{entry.quantity}</span>
                       )}
-                      {entry.spol && entry.spol !== 'Nepoznato' && (
+                      {entry.spol && entry.spol !== 'Nepoznato' && entry.type === 'odstrjel' && (
                         <span className="text-xs bg-blue-50 text-blue-600 px-2 py-0.5 rounded-full">{entry.spol}</span>
                       )}
                       <span className="text-xs px-2 py-0.5 rounded-full font-medium text-white" style={{ background: t.color }}>
@@ -447,7 +440,7 @@ export default function DnevnikPage() {
                       </span>
                       {trebaMarciku && (
                         entry.markica_dodijeljena
-                          ? <span className="text-xs bg-green-100 text-green-700 px-2 py-0.5 rounded-full">🏷️ {entry.markica_broj || 'Markica ✓'}</span>
+                          ? <span className="text-xs bg-green-100 text-green-700 px-2 py-0.5 rounded-full">🏷️ {entry.markica_broj || '✓'}</span>
                           : <span className="text-xs bg-red-100 text-red-700 px-2 py-0.5 rounded-full font-semibold">⚠️ Bez markice</span>
                       )}
                     </div>
@@ -456,6 +449,9 @@ export default function DnevnikPage() {
                       {' · '}{(entry.profiles as any)?.full_name}
                       {(entry.poi as any)?.name && ` · 📍 ${(entry.poi as any).name}`}
                     </p>
+                    {entry.type === 'skupni_lov' && entry.sudionici?.length > 0 && (
+                      <p className="text-xs text-gray-400 mt-0.5">👥 {entry.sudionici.join(', ')}</p>
+                    )}
                     {entry.notes && <p className="text-xs text-gray-600 mt-1 truncate">{entry.notes}</p>}
                   </div>
                   {canEdit && (
@@ -480,32 +476,32 @@ export default function DnevnikPage() {
                       {entry.temperatura && <div><span className="text-gray-400">Temp:</span> {entry.temperatura}°C</div>}
                       {entry.vjetar && <div><span className="text-gray-400">Vjetar:</span> {entry.vjetar}</div>}
                       {entry.vidljivost && <div><span className="text-gray-400">Vidljivost:</span> {entry.vidljivost}</div>}
-                      {entry.starost && entry.starost !== 'Nepoznato' && <div><span className="text-gray-400">Starost:</span> {entry.starost}</div>}
+                      {entry.starost && entry.starost !== 'Nepoznato' && entry.type === 'odstrjel' && (
+                        <div><span className="text-gray-400">Starost:</span> {entry.starost}</div>
+                      )}
                     </div>
 
-                    {/* Skupni lov — detalji po vrsti */}
-                    {entry.type === 'skupni_lov' && entry.vrste_odstrjela?.length > 0 && (
-                      <div className="mt-3">
-                        <div className="text-xs font-semibold text-gray-500 mb-2">VRSTE ODSTRJELA:</div>
-                        <div className="space-y-2">
-                          {entry.vrste_odstrjela.map((v: any, i: number) => {
-                            const vm = MARKICE[v.species]
-                            return (
-                              <div key={i} className="bg-purple-50 rounded-lg px-3 py-2 text-sm">
-                                <div className="flex items-center gap-2 flex-wrap">
-                                  <span className="font-medium">{v.species}</span>
-                                  <span className="text-xs bg-purple-100 text-purple-700 px-2 py-0.5 rounded-full">×{v.quantity}</span>
-                                  {v.spol !== 'Nepoznato' && <span className="text-xs text-gray-500">{v.spol}</span>}
-                                  {vm && (
-                                    v.markica_dodijeljena
-                                      ? <span className="text-xs bg-green-100 text-green-700 px-2 py-0.5 rounded-full">🏷️ {v.markica_broj || '✓'}</span>
-                                      : <span className="text-xs bg-red-100 text-red-700 px-2 py-0.5 rounded-full">⚠️ Bez markice</span>
-                                  )}
-                                </div>
+                    {/* Skupne stavke */}
+                    {entry.type === 'skupni_lov' && entry.skupni_stavke?.length > 0 && (
+                      <div className="mt-3 space-y-2">
+                        {entry.skupni_stavke.map((s: SkupniStavka, i: number) => {
+                          const mk = MARKICE[s.species]
+                          return (
+                            <div key={i} className="bg-purple-50 rounded-lg p-3 text-sm">
+                              <div className="flex items-center gap-2 flex-wrap">
+                                <span className="font-medium">{i+1}. {s.species}</span>
+                                {s.spol !== 'Nepoznato' && <span className="text-xs bg-blue-100 text-blue-700 px-2 py-0.5 rounded-full">{s.spol}</span>}
+                                {s.starost !== 'Odraslo' && <span className="text-xs bg-gray-100 text-gray-600 px-2 py-0.5 rounded-full">{s.starost}</span>}
+                                {s.strijelac_id && <span className="text-xs text-gray-500">· {lovci.find(l => l.id === s.strijelac_id)?.full_name}</span>}
+                                {mk && (s.markica_dodijeljena
+                                  ? <span className="text-xs bg-green-100 text-green-700 px-2 py-0.5 rounded-full">🏷️ {s.markica_broj || '✓'}</span>
+                                  : <span className="text-xs bg-red-100 text-red-700 px-2 py-0.5 rounded-full">⚠️ Bez markice</span>
+                                )}
+                                {s.masa_trupla && <span className="text-xs text-gray-500">· {s.masa_trupla} kg</span>}
                               </div>
-                            )
-                          })}
-                        </div>
+                            </div>
+                          )
+                        })}
                       </div>
                     )}
 
@@ -513,8 +509,8 @@ export default function DnevnikPage() {
                       <div className={`mt-3 p-3 rounded-xl text-sm ${entry.markica_dodijeljena ? 'bg-green-50 border border-green-100' : 'bg-red-50 border border-red-100'}`}>
                         <div className="flex items-center gap-2 flex-wrap">
                           <span>🏷️</span>
-                          <span className="font-semibold" style={{ color: markica?.bg }}>
-                            Markica {markica?.boja} · {markica?.kratica}
+                          <span className="font-semibold" style={{ color: markica.bg }}>
+                            Markica {markica.boja} · {markica.kratica}
                           </span>
                           {entry.markica_dodijeljena
                             ? <span className="text-green-700 text-xs font-medium">✓ Dodijeljena</span>
@@ -525,9 +521,6 @@ export default function DnevnikPage() {
                         </div>
                       </div>
                     )}
-                    {entry.sudionici?.length > 0 && (
-                      <div className="mt-2 text-sm"><span className="text-gray-400">Sudionici:</span> {entry.sudionici.join(', ')}</div>
-                    )}
                     {entry.notes && <div className="mt-2 text-sm text-gray-600 bg-gray-50 rounded-lg p-2">{entry.notes}</div>}
                   </div>
                 )}
@@ -537,10 +530,10 @@ export default function DnevnikPage() {
         </div>
       </div>
 
-      {/* Modal */}
+      {/* Modal — 2xl širina */}
       {showForm && (
         <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-2xl p-6 w-full max-w-xl shadow-2xl max-h-[90vh] overflow-y-auto">
+          <div className="bg-white rounded-2xl p-6 w-full max-w-2xl shadow-2xl max-h-[92vh] overflow-y-auto">
             <div className="flex items-center justify-between mb-5">
               <h3 className="font-semibold text-gray-800 text-lg">{editingEntry ? 'Uredi unos' : 'Novi unos'}</h3>
               <button onClick={() => { setShowForm(false); setEditingEntry(null) }} className="text-gray-400 hover:text-gray-600 text-xl">✕</button>
@@ -550,9 +543,9 @@ export default function DnevnikPage() {
             <div className="grid grid-cols-5 gap-2 mb-5">
               {TYPES.map(t => (
                 <button key={t.key} onClick={() => setEntryType(t.key)}
-                  className={`py-2 rounded-xl text-center border transition-all ${entryType === t.key ? 'text-white border-transparent' : 'border-gray-200'}`}
+                  className={`py-2.5 rounded-xl text-center border transition-all ${entryType === t.key ? 'text-white border-transparent' : 'border-gray-200 hover:border-gray-300'}`}
                   style={{ background: entryType === t.key ? t.color : undefined }}>
-                  <div className="text-xl">{t.icon}</div>
+                  <div className="text-2xl">{t.icon}</div>
                   <div className="text-xs mt-0.5">{t.label}</div>
                 </button>
               ))}
@@ -560,10 +553,11 @@ export default function DnevnikPage() {
 
             <div className="space-y-4">
 
-              {/* ODSTRJEL */}
+              {/* ===== ODSTRJEL ===== */}
               {entryType === 'odstrjel' && (
                 <>
-                  <div className="grid grid-cols-2 gap-3">
+                  <SectionTitle>Divljač</SectionTitle>
+                  <div className="grid grid-cols-2 gap-4">
                     <div>
                       <label className={labelCls}>Vrsta divljači *</label>
                       <select value={form.species} onChange={e => handleSpeciesChange(e.target.value)} className={inputCls}>
@@ -591,54 +585,21 @@ export default function DnevnikPage() {
                   </div>
 
                   {showMarkica && (
-                    <div className="bg-blue-50 rounded-xl p-4 border border-blue-100">
-                      <div className="flex items-center justify-between mb-3">
-                        <div className="flex items-center gap-2 flex-wrap">
-                          <span className="text-sm font-semibold text-blue-900">🏷️ Evidencijska markica</span>
-                          <span className="text-xs px-2 py-0.5 rounded-full font-semibold"
-                            style={{ background: markicaInfo?.bg, color: markicaInfo?.text }}>
-                            {markicaInfo?.boja} · {markicaInfo?.kratica}
-                          </span>
-                        </div>
-                        <label className="flex items-center gap-2 cursor-pointer select-none">
-                          <span className="text-xs text-blue-700 font-medium">Dodijeljena</span>
-                          <div onClick={() => setForm(f => ({...f, markica_dodijeljena: !f.markica_dodijeljena}))}
-                            className={`w-11 h-6 rounded-full transition-colors cursor-pointer flex items-center px-1 ${form.markica_dodijeljena ? 'bg-blue-600' : 'bg-gray-300'}`}>
-                            <div className={`w-4 h-4 rounded-full bg-white shadow transition-transform ${form.markica_dodijeljena ? 'translate-x-5' : 'translate-x-0'}`} />
-                          </div>
-                        </label>
-                      </div>
-                      <div className="grid grid-cols-2 gap-3">
-                        <div>
-                          <label className="text-xs text-gray-600 mb-1 block">
-                            Serijski broj <span className="text-gray-400">(lovna god. {lovnaGodina}/{lovnaGodina+1})</span>
-                          </label>
-                          <input value={form.markica_broj}
-                            onChange={e => setForm(f => ({...f, markica_broj: e.target.value}))}
-                            className="w-full border border-blue-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400"
-                            placeholder={`RH-${markicaInfo?.kratica}-${lovnaGodina}-000000`} />
-                        </div>
-                        <div>
-                          <label className="text-xs text-gray-600 mb-1 block">Datum dodjele</label>
-                          <input type="date" value={form.markica_datum}
-                            onChange={e => setForm(f => ({...f, markica_datum: e.target.value}))}
-                            className="w-full border border-blue-200 rounded-lg px-3 py-2 text-sm focus:outline-none" />
-                        </div>
-                      </div>
-                      {!form.markica_dodijeljena && (
-                        <div className="mt-2 text-xs text-amber-700 bg-amber-100 rounded-lg p-2 flex items-start gap-1">
-                          <span>⚠️</span>
-                          <span>Krupna divljač mora biti označena markicom odmah nakon odstrela, prije pomicanja s mjesta! (Pravilnik o potvrdi o podrijetlu divljači, NN)</span>
-                        </div>
-                      )}
-                    </div>
+                    <MarkicaBlock
+                      species={form.species}
+                      markicaBroj={form.markica_broj}
+                      markicaDodijeljena={form.markica_dodijeljena}
+                      markicaDatum={form.markica_datum}
+                      onChange={(key, val) => setForm(f => ({...f, [key]: val}))}
+                    />
                   )}
 
-                  <div className="grid grid-cols-2 gap-3">
+                  <SectionTitle>Lov</SectionTitle>
+                  <div className="grid grid-cols-2 gap-4">
                     <div>
                       <label className={labelCls}>Način lova</label>
                       <select value={form.nacin_lova} onChange={e => setForm(f => ({...f, nacin_lova: e.target.value}))} className={inputCls}>
-                        {NACIN_LOVA.filter(n => n !== 'Skupni lov').map(n => <option key={n}>{n}</option>)}
+                        {NACIN_LOVA.map(n => <option key={n}>{n}</option>)}
                       </select>
                     </div>
                     <div>
@@ -650,7 +611,9 @@ export default function DnevnikPage() {
                     </div>
                   </div>
                   <DateTimeFields />
-                  <div className="grid grid-cols-2 gap-3">
+
+                  <SectionTitle>Oružje i odstrjel</SectionTitle>
+                  <div className="grid grid-cols-2 gap-4">
                     <div>
                       <label className={labelCls}>Oružje</label>
                       <input value={form.oruzje} onChange={e => setForm(f => ({...f, oruzje: e.target.value}))}
@@ -687,10 +650,11 @@ export default function DnevnikPage() {
                 </>
               )}
 
-              {/* OPAŽANJE */}
+              {/* ===== OPAŽANJE ===== */}
               {entryType === 'opazanje' && (
                 <>
-                  <div className="grid grid-cols-2 gap-3">
+                  <SectionTitle>Divljač</SectionTitle>
+                  <div className="grid grid-cols-2 gap-4">
                     <div>
                       <label className={labelCls}>Vrsta divljači *</label>
                       <select value={form.species} onChange={e => setForm(f => ({...f, species: e.target.value}))} className={inputCls}>
@@ -715,6 +679,10 @@ export default function DnevnikPage() {
                         {STAROST.map(s => <option key={s}>{s}</option>)}
                       </select>
                     </div>
+                  </div>
+
+                  <SectionTitle>Lokacija i uvjeti</SectionTitle>
+                  <div className="grid grid-cols-2 gap-4">
                     <div>
                       <label className={labelCls}>Lokacija / Čeka</label>
                       <select value={form.poi_id} onChange={e => setForm(f => ({...f, poi_id: e.target.value}))} className={inputCls}>
@@ -733,78 +701,141 @@ export default function DnevnikPage() {
                 </>
               )}
 
-              {/* SKUPNI LOV */}
+              {/* ===== SKUPNI LOV ===== */}
               {entryType === 'skupni_lov' && (
                 <>
+                  <SectionTitle>Osnovni podaci</SectionTitle>
+                  <div className="grid grid-cols-2 gap-4">
+                    <div>
+                      <label className={labelCls}>Čeka / Lokacija</label>
+                      <select value={form.poi_id} onChange={e => setForm(f => ({...f, poi_id: e.target.value}))} className={inputCls}>
+                        <option value="">Odaberi...</option>
+                        {pois.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+                      </select>
+                    </div>
+                    <div>
+                      <label className={labelCls}>Vjetar</label>
+                      <select value={form.vjetar} onChange={e => setForm(f => ({...f, vjetar: e.target.value}))} className={inputCls}>
+                        {VJETAR.map(v => <option key={v}>{v}</option>)}
+                      </select>
+                    </div>
+                  </div>
                   <DateTimeFields />
+
+                  <SectionTitle>Odstrjel — stavke</SectionTitle>
+                  <div className="space-y-3">
+                    {form.skupni_stavke.map((stavka, idx) => {
+                      const mk = MARKICE[stavka.species]
+                      return (
+                        <div key={stavka.id} className="border border-gray-200 rounded-xl p-4 bg-gray-50">
+                          <div className="flex items-center justify-between mb-3">
+                            <span className="text-sm font-semibold text-gray-700">Stavka {idx + 1}</span>
+                            {form.skupni_stavke.length > 1 && (
+                              <button onClick={() => setForm(f => ({
+                                ...f, skupni_stavke: f.skupni_stavke.filter(s => s.id !== stavka.id)
+                              }))} className="text-xs text-red-500 hover:text-red-700">Ukloni</button>
+                            )}
+                          </div>
+                          <div className="grid grid-cols-2 gap-3 mb-3">
+                            <div>
+                              <label className="text-xs font-medium text-gray-600 mb-1 block">Vrsta divljači *</label>
+                              <select value={stavka.species}
+                                onChange={e => handleSkupniSpeciesChange(stavka.id, e.target.value)}
+                                className={inputCls}>
+                                <option value="">Odaberi...</option>
+                                {VRSTE_DIVLJACI.map(v => <option key={v}>{v}</option>)}
+                              </select>
+                            </div>
+                            <div>
+                              <label className="text-xs font-medium text-gray-600 mb-1 block">Strijelac</label>
+                              <select value={stavka.strijelac_id}
+                                onChange={e => setForm(f => ({
+                                  ...f, skupni_stavke: f.skupni_stavke.map(s =>
+                                    s.id === stavka.id ? { ...s, strijelac_id: e.target.value } : s
+                                  )
+                                }))} className={inputCls}>
+                                <option value="">Odaberi lovca...</option>
+                                {lovci.map(l => <option key={l.id} value={l.id}>{l.full_name}</option>)}
+                              </select>
+                            </div>
+                            <div>
+                              <label className="text-xs font-medium text-gray-600 mb-1 block">Spol</label>
+                              <select value={stavka.spol}
+                                onChange={e => setForm(f => ({
+                                  ...f, skupni_stavke: f.skupni_stavke.map(s =>
+                                    s.id === stavka.id ? { ...s, spol: e.target.value } : s
+                                  )
+                                }))} className={inputCls}>
+                                {SPOL.map(s => <option key={s}>{s}</option>)}
+                              </select>
+                            </div>
+                            <div>
+                              <label className="text-xs font-medium text-gray-600 mb-1 block">Starost</label>
+                              <select value={stavka.starost}
+                                onChange={e => setForm(f => ({
+                                  ...f, skupni_stavke: f.skupni_stavke.map(s =>
+                                    s.id === stavka.id ? { ...s, starost: e.target.value } : s
+                                  )
+                                }))} className={inputCls}>
+                                {STAROST.map(s => <option key={s}>{s}</option>)}
+                              </select>
+                            </div>
+                            <div>
+                              <label className="text-xs font-medium text-gray-600 mb-1 block">Masa trupla (kg)</label>
+                              <input type="number" step="0.1" value={stavka.masa_trupla}
+                                onChange={e => setForm(f => ({
+                                  ...f, skupni_stavke: f.skupni_stavke.map(s =>
+                                    s.id === stavka.id ? { ...s, masa_trupla: e.target.value } : s
+                                  )
+                                }))} className={inputCls} placeholder="0.0" />
+                            </div>
+                          </div>
+
+                          {mk && (
+                            <MarkicaBlock
+                              species={stavka.species}
+                              markicaBroj={stavka.markica_broj}
+                              markicaDodijeljena={stavka.markica_dodijeljena}
+                              markicaDatum={stavka.markica_datum}
+                              onChange={(key, val) => setForm(f => ({
+                                ...f, skupni_stavke: f.skupni_stavke.map(s =>
+                                  s.id === stavka.id ? { ...s, [key]: val } : s
+                                )
+                              }))}
+                            />
+                          )}
+                        </div>
+                      )
+                    })}
+
+                    <button onClick={() => setForm(f => ({
+                      ...f, skupni_stavke: [...f.skupni_stavke, novaSkupnaStavka()]
+                    }))}
+                      className="w-full py-2.5 border-2 border-dashed border-gray-200 rounded-xl text-sm text-gray-400 hover:border-forest-400 hover:text-forest-600 transition-colors">
+                      + Dodaj stavku odstrjela
+                    </button>
+                  </div>
+                </>
+              )}
+
+              {/* ===== RAD ===== */}
+              {entryType === 'rad' && (
+                <>
+                  <SectionTitle>Lokacija i vrijeme</SectionTitle>
                   <div>
-                    <label className={labelCls}>Čeka / Lokacija</label>
+                    <label className={labelCls}>Lokacija / Objekt</label>
                     <select value={form.poi_id} onChange={e => setForm(f => ({...f, poi_id: e.target.value}))} className={inputCls}>
                       <option value="">Odaberi...</option>
                       {pois.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
                     </select>
                   </div>
+                  <DateTimeFields />
 
-                  {/* Vrste odstrjela */}
-                  <div>
-                    <div className="flex items-center justify-between mb-2">
-                      <label className={labelCls}>Vrste i količine odstrjela *</label>
-                      <button onClick={addVrsta}
-                        className="text-xs bg-purple-50 text-purple-700 hover:bg-purple-100 px-3 py-1.5 rounded-lg font-medium transition-colors">
-                        + Dodaj vrstu
-                      </button>
-                    </div>
-                    <div className="space-y-3">
-                      {form.vrste_odstrjela.map((vrsta, idx) => (
-                        <div key={vrsta.id} className="bg-gray-50 rounded-xl p-3 border border-gray-100">
-                          <div className="flex items-center gap-2 mb-2">
-                            <span className="text-xs font-semibold text-gray-500 w-4">{idx + 1}.</span>
-                            <select value={vrsta.species}
-                              onChange={e => updateVrsta(vrsta.id, 'species', e.target.value)}
-                              className="flex-1 border border-gray-200 rounded-lg px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-purple-400">
-                              <option value="">Odaberi vrstu...</option>
-                              {VRSTE_DIVLJACI.map(v => <option key={v}>{v}</option>)}
-                            </select>
-                            <input type="number" min="1" value={vrsta.quantity}
-                              onChange={e => updateVrsta(vrsta.id, 'quantity', parseInt(e.target.value) || 1)}
-                              className="w-16 border border-gray-200 rounded-lg px-2 py-1.5 text-sm text-center focus:outline-none"
-                              placeholder="kom" />
-                            {form.vrste_odstrjela.length > 1 && (
-                              <button onClick={() => removeVrsta(vrsta.id)}
-                                className="text-red-400 hover:text-red-600 text-lg leading-none flex-shrink-0">×</button>
-                            )}
-                          </div>
-                          <div className="grid grid-cols-2 gap-2 pl-6">
-                            <select value={vrsta.spol}
-                              onChange={e => updateVrsta(vrsta.id, 'spol', e.target.value)}
-                              className="border border-gray-200 rounded-lg px-2 py-1.5 text-xs focus:outline-none">
-                              {SPOL.map(s => <option key={s}>{s}</option>)}
-                            </select>
-                            <select value={vrsta.starost}
-                              onChange={e => updateVrsta(vrsta.id, 'starost', e.target.value)}
-                              className="border border-gray-200 rounded-lg px-2 py-1.5 text-xs focus:outline-none">
-                              {STAROST.map(s => <option key={s}>{s}</option>)}
-                            </select>
-                          </div>
-                          {/* Markica za krupnu divljač u skupnom lovu */}
-                          <div className="pl-6">
-                            <MarkicaPolje
-                              vrsta={vrsta}
-                              onChange={(field, value) => updateVrsta(vrsta.id, field, value)}
-                            />
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                    <div className="mt-2 text-xs text-gray-400 text-right">
-                      Ukupno: {form.vrste_odstrjela.reduce((a, v) => a + v.quantity, 0)} komada
-                    </div>
-                  </div>
-
-                  <div>
-                    <label className={labelCls}>Sudionici lova</label>
-                    <div className="max-h-36 overflow-y-auto border border-gray-200 rounded-xl p-3">
-                      {lovci.map(l => (
+                  <SectionTitle>Sudionici</SectionTitle>
+                  <div className="max-h-40 overflow-y-auto border border-gray-200 rounded-xl p-3">
+                    {lovci.length === 0
+                      ? <div className="text-sm text-gray-400 text-center py-2">Nema lovaca u registru</div>
+                      : lovci.map(l => (
                         <label key={l.id} className="flex items-center gap-2 py-1.5 cursor-pointer hover:bg-gray-50 rounded px-1">
                           <input type="checkbox"
                             checked={form.sudionici.includes(l.full_name)}
@@ -815,46 +846,16 @@ export default function DnevnikPage() {
                             }))} />
                           <span className="text-sm">{l.full_name}</span>
                         </label>
-                      ))}
-                    </div>
+                      ))
+                    }
                   </div>
                 </>
               )}
 
-              {/* RAD */}
-              {entryType === 'rad' && (
-                <>
-                  <div>
-                    <label className={labelCls}>Lokacija / Objekt</label>
-                    <select value={form.poi_id} onChange={e => setForm(f => ({...f, poi_id: e.target.value}))} className={inputCls}>
-                      <option value="">Odaberi...</option>
-                      {pois.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
-                    </select>
-                  </div>
-                  <DateTimeFields />
-                  <div>
-                    <label className={labelCls}>Sudionici</label>
-                    <div className="max-h-32 overflow-y-auto border border-gray-200 rounded-xl p-3">
-                      {lovci.map(l => (
-                        <label key={l.id} className="flex items-center gap-2 py-1 cursor-pointer">
-                          <input type="checkbox"
-                            checked={form.sudionici.includes(l.full_name)}
-                            onChange={() => setForm(f => ({
-                              ...f, sudionici: f.sudionici.includes(l.full_name)
-                                ? f.sudionici.filter(s => s !== l.full_name)
-                                : [...f.sudionici, l.full_name]
-                            }))} />
-                          <span className="text-sm">{l.full_name}</span>
-                        </label>
-                      ))}
-                    </div>
-                  </div>
-                </>
-              )}
-
-              {/* OSTALO */}
+              {/* ===== OSTALO ===== */}
               {entryType === 'ostalo' && (
                 <>
+                  <SectionTitle>Lokacija i vrijeme</SectionTitle>
                   <div>
                     <label className={labelCls}>Lokacija</label>
                     <select value={form.poi_id} onChange={e => setForm(f => ({...f, poi_id: e.target.value}))} className={inputCls}>
@@ -880,7 +881,7 @@ export default function DnevnikPage() {
               </div>
 
               <button onClick={saveEntry}
-                className="w-full text-white font-medium py-3 rounded-xl transition-colors"
+                className="w-full text-white font-medium py-3 rounded-xl transition-colors text-base"
                 style={{ background: TYPES.find(t => t.key === entryType)?.color }}>
                 {editingEntry ? 'Spremi izmjene' : 'Spremi unos'}
               </button>
