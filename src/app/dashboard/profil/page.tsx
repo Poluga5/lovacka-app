@@ -9,9 +9,11 @@ export default function ProfilPage() {
   const [isAdmin, setIsAdmin] = useState(false)
   const [selectedMember, setSelectedMember] = useState<any>(null)
   const [view, setView] = useState<'list' | 'form'>('form')
+  const [loading, setLoading] = useState(true)
   const [form, setForm] = useState({
-    full_name: '', phone: '', email: '', address: '',
-    li_broj: '', ol_brojevi: '', date_of_birth: '', member_since: '', notes: ''
+    full_name: '', phone: '', email: '',
+    address: '', li_broj: '', ol_brojevi: '',
+    date_of_birth: '', member_since: '', notes: ''
   })
   const supabase = createClient()
 
@@ -30,30 +32,33 @@ export default function ProfilPage() {
 
     const { data: prof } = await supabase
       .from('profiles').select('*').eq('id', user.id).single()
-    if (prof) { setProfile(prof); fillForm(prof) }
+    if (prof) {
+      setProfile(prof)
+      if (!admin) fillForm(prof)
+    }
 
     if (admin) {
-      // Dohvati group_members pa za svaki dohvati profile
       const { data: gms } = await supabase
         .from('group_members')
-        .select('role, user_id')
+        .select('id, role, user_id')
         .eq('group_id', member.group_id)
 
       if (gms && gms.length > 0) {
         const userIds = gms.map(g => g.user_id)
         const { data: profs } = await supabase
-          .from('profiles')
-          .select('*')
-          .in('id', userIds)
+          .from('profiles').select('*').in('id', userIds)
 
         const combined = gms.map(g => ({
+          id: g.id,
           role: g.role,
+          user_id: g.user_id,
           profiles: profs?.find(p => p.id === g.user_id) ?? null
         }))
         setMembers(combined)
       }
       setView('list')
     }
+    setLoading(false)
   }
 
   function fillForm(prof: any) {
@@ -71,88 +76,105 @@ export default function ProfilPage() {
   }
 
   async function saveProfile() {
-    const id = selectedMember?.profiles?.id ?? profile?.id
+    const id = selectedMember?.user_id ?? profile?.id
     if (!id) return
     const { error } = await supabase.from('profiles').update({
       full_name: form.full_name,
-      phone: form.phone,
-      address: form.address,
-      li_broj: form.li_broj,
+      phone: form.phone || null,
+      address: form.address || null,
+      li_broj: form.li_broj || null,
       ol_brojevi: form.ol_brojevi.split(',').map((s: string) => s.trim()).filter(Boolean),
       date_of_birth: form.date_of_birth || null,
       member_since: form.member_since || null,
-      notes: form.notes,
+      notes: form.notes || null,
     }).eq('id', id)
     if (error) { toast.error('Greška pri spremanju'); return }
     toast.success('Podaci spremljeni!')
-    if (isAdmin) { setView('list'); setSelectedMember(null); load() }
+    if (isAdmin) {
+      setView('list')
+      setSelectedMember(null)
+      load()
+    }
   }
 
   function openMember(m: any) {
     setSelectedMember(m)
-    fillForm(m.profiles)
+    fillForm(m.profiles ?? {})
     setView('form')
   }
 
-  const ROLE_COLOR: Record<string, string> = {
-    admin: '#DC2626', clan: '#16A34A', gost: '#6B7280'
+  const ROLE_COLOR: Record<string, { bg: string, text: string }> = {
+    admin: { bg: '#fee2e2', text: '#dc2626' },
+    clan:  { bg: '#d1fae5', text: '#065f46' },
+    gost:  { bg: '#f3f4f6', text: '#6b7280' },
   }
 
+  const inputCls = "w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-forest-500"
+  const labelCls = "text-sm font-medium text-gray-700 mb-1 block"
+
   const fields = [
-    { key: 'full_name', label: 'Ime i prezime', type: 'text' },
-    { key: 'email', label: 'Email', type: 'email', disabled: true },
-    { key: 'phone', label: 'Mobitel', type: 'tel' },
-    { key: 'address', label: 'Adresa', type: 'text' },
-    { key: 'li_broj', label: 'LI broj (lovačka iskaznica)', type: 'text' },
-    { key: 'ol_brojevi', label: 'OL brojevi (odvojeni zarezom)', type: 'text' },
-    { key: 'date_of_birth', label: 'Datum rođenja', type: 'date' },
-    { key: 'member_since', label: 'Član od', type: 'date' },
+    { key: 'full_name',    label: 'Ime i prezime',                    type: 'text',  full: true },
+    { key: 'email',        label: 'Email',                            type: 'email', disabled: true },
+    { key: 'phone',        label: 'Mobitel',                          type: 'tel' },
+    { key: 'address',      label: 'Adresa',                           type: 'text',  full: true },
+    { key: 'li_broj',      label: 'LI broj (lovačka iskaznica)',      type: 'text' },
+    { key: 'ol_brojevi',   label: 'OL brojevi (odvojeni zarezom)',    type: 'text' },
+    { key: 'date_of_birth', label: 'Datum rođenja',                   type: 'date' },
+    { key: 'member_since', label: 'Član od',                          type: 'date' },
   ]
 
+  if (loading) return <div className="p-6 text-center text-gray-400">Učitavam...</div>
+
   return (
-    <div style={{ padding: 24, maxWidth: 900, margin: '0 auto' }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 24 }}>
+    <div className="p-6 max-w-3xl mx-auto">
+
+      {/* Header */}
+      <div className="flex items-center gap-3 mb-6">
         {isAdmin && view === 'form' && (
           <button onClick={() => { setView('list'); setSelectedMember(null) }}
-            style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: 22, color: '#6b7280' }}>‹</button>
+            className="text-gray-400 hover:text-gray-600 text-2xl leading-none">‹</button>
         )}
-        <h1 style={{ fontSize: 22, fontWeight: 600, margin: 0 }}>
-          {view === 'list' ? 'Članovi lovišta' : selectedMember ? selectedMember.profiles?.full_name : 'Moj profil'}
+        <h1 className="text-2xl font-bold text-gray-900 flex-1">
+          {view === 'list' ? 'Članovi lovišta' : selectedMember ? (selectedMember.profiles?.full_name ?? 'Član') : 'Moj profil'}
         </h1>
         {isAdmin && view === 'list' && (
           <button onClick={() => { setSelectedMember(null); fillForm(profile); setView('form') }}
-            style={{ marginLeft: 'auto', padding: '6px 16px', background: '#247a4b', color: 'white', border: 'none', borderRadius: 8, fontSize: 13, cursor: 'pointer' }}>
+            className="bg-forest-600 hover:bg-forest-700 text-white px-4 py-2 rounded-xl text-sm font-medium transition-colors">
             Moj profil
           </button>
         )}
       </div>
 
+      {/* Lista članova (samo admin) */}
       {isAdmin && view === 'list' && (
-        <div style={{ background: 'white', borderRadius: 16, border: '1px solid #e5e7eb', overflow: 'hidden' }}>
-          {members.length === 0 && (
-            <div style={{ padding: 32, textAlign: 'center', color: '#9ca3af' }}>Učitavam članove...</div>
-          )}
+        <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
+          <div className="px-6 py-3 border-b border-gray-100 text-xs text-gray-400 font-medium">
+            {members.length} članova
+          </div>
           {members.map((m, i) => {
             const prof = m.profiles
+            const roleColor = ROLE_COLOR[m.role] ?? ROLE_COLOR.gost
             return (
-              <div key={i} onClick={() => openMember(m)}
-                style={{ padding: '14px 20px', borderBottom: '1px solid #f3f4f6', display: 'flex', alignItems: 'center', justifyContent: 'space-between', cursor: 'pointer' }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-                  <div style={{ width: 40, height: 40, borderRadius: '50%', background: '#E8F5E9', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 700, color: '#16A34A', fontSize: 16 }}>
-                    {prof?.full_name?.charAt(0) ?? '?'}
-                  </div>
-                  <div>
-                    <div style={{ fontWeight: 500, fontSize: 14 }}>{prof?.full_name}</div>
-                    <div style={{ fontSize: 12, color: '#6b7280' }}>{prof?.email}</div>
-                    {prof?.li_broj && <div style={{ fontSize: 12, color: '#6b7280' }}>LI: {prof.li_broj}</div>}
-                    {prof?.phone && <div style={{ fontSize: 12, color: '#6b7280' }}>📱 {prof.phone}</div>}
+              <div key={m.id} onClick={() => openMember(m)}
+                className="px-6 py-4 flex items-center gap-4 cursor-pointer hover:bg-gray-50 transition-colors border-b border-gray-50 last:border-0">
+                <div className="w-11 h-11 rounded-full bg-forest-100 flex items-center justify-center font-bold text-forest-700 text-base flex-shrink-0">
+                  {prof?.full_name?.charAt(0) ?? '?'}
+                </div>
+                <div className="flex-1 min-w-0">
+                  <div className="font-semibold text-sm text-gray-800">{prof?.full_name ?? 'Nepoznato'}</div>
+                  <div className="text-xs text-gray-400 mt-0.5">{prof?.email}</div>
+                  <div className="flex gap-3 mt-1 text-xs text-gray-400">
+                    {prof?.li_broj && <span>LI: {prof.li_broj}</span>}
+                    {prof?.phone && <span>📱 {prof.phone}</span>}
+                    {prof?.member_since && <span>Član od: {prof.member_since}</span>}
                   </div>
                 </div>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                  <span style={{ fontSize: 11, background: ROLE_COLOR[m.role] + '20', color: ROLE_COLOR[m.role], padding: '2px 10px', borderRadius: 20, fontWeight: 500 }}>
+                <div className="flex items-center gap-3 flex-shrink-0">
+                  <span className="text-xs font-semibold px-2.5 py-1 rounded-full"
+                    style={{ background: roleColor.bg, color: roleColor.text }}>
                     {m.role}
                   </span>
-                  <span style={{ color: '#9ca3af', fontSize: 18 }}>›</span>
+                  <span className="text-gray-300 text-lg">›</span>
                 </div>
               </div>
             )
@@ -160,34 +182,63 @@ export default function ProfilPage() {
         </div>
       )}
 
+      {/* Forma */}
       {view === 'form' && (
-        <div style={{ background: 'white', borderRadius: 16, border: '1px solid #e5e7eb', padding: 24 }}>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
-            {fields.map(field => (
-              <div key={field.key}>
-                <label style={{ fontSize: 12, fontWeight: 500, color: '#374151', display: 'block', marginBottom: 4 }}>
-                  {field.label}
-                </label>
-                <input
-                  type={field.type}
-                  value={(form as any)[field.key]}
-                  onChange={e => setForm(f => ({...f, [field.key]: e.target.value}))}
-                  disabled={(field as any).disabled}
-                  style={{ width: '100%', border: '1px solid #e5e7eb', borderRadius: 8, padding: '8px 12px', fontSize: 14, boxSizing: 'border-box', background: (field as any).disabled ? '#f9fafb' : 'white' }}
-                />
-              </div>
-            ))}
+        <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
+          {/* Avatar header */}
+          <div className="px-6 py-6 border-b border-gray-100 flex items-center gap-4 bg-gradient-to-r from-forest-50 to-white">
+            <div className="w-16 h-16 rounded-full bg-forest-600 flex items-center justify-center text-white text-2xl font-bold flex-shrink-0">
+              {form.full_name?.charAt(0) ?? '?'}
+            </div>
+            <div>
+              <div className="font-semibold text-gray-800 text-lg">{form.full_name || 'Novi profil'}</div>
+              <div className="text-sm text-gray-400">{form.email}</div>
+              {selectedMember && (
+                <span className="text-xs font-medium px-2 py-0.5 rounded-full mt-1 inline-block"
+                  style={{ background: ROLE_COLOR[selectedMember.role]?.bg, color: ROLE_COLOR[selectedMember.role]?.text }}>
+                  {selectedMember.role}
+                </span>
+              )}
+            </div>
           </div>
-          <div style={{ marginTop: 16 }}>
-            <label style={{ fontSize: 12, fontWeight: 500, color: '#374151', display: 'block', marginBottom: 4 }}>Napomena</label>
-            <textarea value={form.notes} onChange={e => setForm(f => ({...f, notes: e.target.value}))}
-              style={{ width: '100%', border: '1px solid #e5e7eb', borderRadius: 8, padding: '8px 12px', fontSize: 14, boxSizing: 'border-box', resize: 'none' }}
-              rows={3} />
+
+          <div className="p-6">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              {fields.map(field => (
+                <div key={field.key} className={(field as any).full ? 'md:col-span-2' : ''}>
+                  <label className={labelCls}>{field.label}</label>
+                  <input
+                    type={field.type}
+                    value={(form as any)[field.key]}
+                    onChange={e => setForm(f => ({...f, [field.key]: e.target.value}))}
+                    disabled={(field as any).disabled}
+                    className={`${inputCls} ${(field as any).disabled ? 'bg-gray-50 text-gray-400 cursor-not-allowed' : ''}`}
+                  />
+                </div>
+              ))}
+            </div>
+
+            <div className="mt-4">
+              <label className={labelCls}>Napomena</label>
+              <textarea value={form.notes}
+                onChange={e => setForm(f => ({...f, notes: e.target.value}))}
+                className={inputCls} rows={3}
+                placeholder="Npr. počasni član od 2010., bivši predsjednik..." />
+            </div>
+
+            <div className="mt-6 flex gap-3">
+              <button onClick={saveProfile}
+                className="bg-forest-600 hover:bg-forest-700 text-white px-6 py-2.5 rounded-xl text-sm font-medium transition-colors">
+                Spremi podatke
+              </button>
+              {isAdmin && view === 'form' && (
+                <button onClick={() => { setView('list'); setSelectedMember(null) }}
+                  className="border border-gray-200 hover:bg-gray-50 text-gray-700 px-6 py-2.5 rounded-xl text-sm font-medium transition-colors">
+                  Odustani
+                </button>
+              )}
+            </div>
           </div>
-          <button onClick={saveProfile}
-            style={{ marginTop: 20, background: '#247a4b', color: 'white', border: 'none', borderRadius: 8, padding: '10px 24px', fontSize: 14, cursor: 'pointer', fontWeight: 500 }}>
-            Spremi podatke
-          </button>
         </div>
       )}
     </div>
