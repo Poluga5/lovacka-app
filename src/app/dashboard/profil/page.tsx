@@ -145,13 +145,13 @@ export default function ProfilPage() {
         )}
       </div>
 
-      {/* Lista članova */}
+      {/* Lista članova (samo admin) */}
       {isAdmin && view === 'list' && (
         <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
           <div className="px-6 py-3 border-b border-gray-100 text-xs text-gray-400 font-medium">
             {members.length} članova
           </div>
-          {members.map(m => {
+          {members.map((m) => {
             const prof = m.profiles
             const roleColor = ROLE_COLOR[m.role] ?? ROLE_COLOR.gost
             return (
