@@ -11,9 +11,9 @@ export default function ProfilPage() {
   const [view, setView] = useState<'list' | 'form'>('form')
   const [loading, setLoading] = useState(true)
   const [form, setForm] = useState({
-    full_name: '', phone: '', email: '',
+    full_name: '', phone: '', email: '', spol: '',
     address: '', li_broj: '', ol_brojevi: '',
-    date_of_birth: '', member_since: '', notes: ''
+    date_of_birth: '', member_since: '', member_until: '', notes: ''
   })
   const supabase = createClient()
 
@@ -66,11 +66,13 @@ export default function ProfilPage() {
       full_name: prof.full_name ?? '',
       phone: prof.phone ?? '',
       email: prof.email ?? '',
+      spol: prof.spol ?? '',
       address: prof.address ?? '',
       li_broj: prof.li_broj ?? '',
       ol_brojevi: (prof.ol_brojevi ?? []).join(', '),
       date_of_birth: prof.date_of_birth ?? '',
       member_since: prof.member_since ?? '',
+      member_until: prof.member_until ?? '',
       notes: prof.notes ?? '',
     })
   }
@@ -81,11 +83,13 @@ export default function ProfilPage() {
     const { error } = await supabase.from('profiles').update({
       full_name: form.full_name,
       phone: form.phone || null,
+      spol: form.spol || null,
       address: form.address || null,
       li_broj: form.li_broj || null,
       ol_brojevi: form.ol_brojevi.split(',').map((s: string) => s.trim()).filter(Boolean),
       date_of_birth: form.date_of_birth || null,
       member_since: form.member_since || null,
+      member_until: form.member_until || null,
       notes: form.notes || null,
     }).eq('id', id)
     if (error) { toast.error('Greška pri spremanju'); return }
@@ -112,17 +116,6 @@ export default function ProfilPage() {
   const inputCls = "w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-forest-500"
   const labelCls = "text-sm font-medium text-gray-700 mb-1 block"
 
-  const fields = [
-    { key: 'full_name',     label: 'Ime i prezime',                 type: 'text',  full: true },
-    { key: 'email',         label: 'Email',                         type: 'email', disabled: true },
-    { key: 'phone',         label: 'Mobitel',                       type: 'tel' },
-    { key: 'address',       label: 'Adresa',                        type: 'text',  full: true },
-    { key: 'li_broj',       label: 'LI broj (lovačka iskaznica)',   type: 'text' },
-    { key: 'ol_brojevi',    label: 'OL brojevi (odvojeni zarezom)', type: 'text' },
-    { key: 'date_of_birth', label: 'Datum rođenja',                 type: 'date' },
-    { key: 'member_since',  label: 'Član od',                       type: 'date' },
-  ]
-
   if (loading) return <div className="p-6 text-center text-gray-400">Učitavam...</div>
 
   return (
@@ -145,13 +138,13 @@ export default function ProfilPage() {
         )}
       </div>
 
-      {/* Lista članova (samo admin) */}
+      {/* Lista članova */}
       {isAdmin && view === 'list' && (
         <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
           <div className="px-6 py-3 border-b border-gray-100 text-xs text-gray-400 font-medium">
             {members.length} članova
           </div>
-          {members.map((m) => {
+          {members.map(m => {
             const prof = m.profiles
             const roleColor = ROLE_COLOR[m.role] ?? ROLE_COLOR.gost
             return (
@@ -163,10 +156,13 @@ export default function ProfilPage() {
                 <div className="flex-1 min-w-0">
                   <div className="font-semibold text-sm text-gray-800">{prof?.full_name ?? 'Nepoznato'}</div>
                   <div className="text-xs text-gray-400 mt-0.5">{prof?.email}</div>
-                  <div className="flex gap-3 mt-1 text-xs text-gray-400">
+                  <div className="flex flex-wrap gap-3 mt-1 text-xs text-gray-400">
+                    {prof?.spol && <span>⚥ {prof.spol}</span>}
                     {prof?.li_broj && <span>LI: {prof.li_broj}</span>}
                     {prof?.phone && <span>📱 {prof.phone}</span>}
+                    {prof?.address && <span>📍 {prof.address}</span>}
                     {prof?.member_since && <span>Član od: {prof.member_since}</span>}
+                    {prof?.member_until && <span>Član do: {prof.member_until}</span>}
                   </div>
                 </div>
                 <div className="flex items-center gap-3 flex-shrink-0">
@@ -202,36 +198,99 @@ export default function ProfilPage() {
             </div>
           </div>
 
-          <div className="p-6">
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              {fields.map(field => (
-                <div key={field.key} className={(field as any).full ? 'md:col-span-2' : ''}>
-                  <label className={labelCls}>{field.label}</label>
-                  <input
-                    type={field.type}
-                    value={(form as any)[field.key]}
-                    onChange={e => setForm(f => ({...f, [field.key]: e.target.value}))}
-                    disabled={(field as any).disabled}
-                    className={`${inputCls} ${(field as any).disabled ? 'bg-gray-50 text-gray-400 cursor-not-allowed' : ''}`}
-                  />
+          <div className="p-6 space-y-4">
+
+            {/* Osobni podaci */}
+            <div>
+              <h3 className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-3">Osobni podaci</h3>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div className="md:col-span-2">
+                  <label className={labelCls}>Ime i prezime</label>
+                  <input type="text" value={form.full_name}
+                    onChange={e => setForm(f => ({...f, full_name: e.target.value}))}
+                    className={inputCls} placeholder="npr. Pero Perić" />
                 </div>
-              ))}
+                <div>
+                  <label className={labelCls}>Spol</label>
+                  <select value={form.spol} onChange={e => setForm(f => ({...f, spol: e.target.value}))} className={inputCls}>
+                    <option value="">Odaberi...</option>
+                    <option value="Muško">Muško</option>
+                    <option value="Žensko">Žensko</option>
+                  </select>
+                </div>
+                <div>
+                  <label className={labelCls}>Datum rođenja</label>
+                  <input type="date" value={form.date_of_birth}
+                    onChange={e => setForm(f => ({...f, date_of_birth: e.target.value}))}
+                    className={inputCls} />
+                </div>
+                <div className="md:col-span-2">
+                  <label className={labelCls}>Email</label>
+                  <input type="email" value={form.email} disabled
+                    className={`${inputCls} bg-gray-50 text-gray-400 cursor-not-allowed`} />
+                </div>
+                <div>
+                  <label className={labelCls}>Mobitel</label>
+                  <input type="tel" value={form.phone}
+                    onChange={e => setForm(f => ({...f, phone: e.target.value}))}
+                    className={inputCls} placeholder="npr. 099 123 4567" />
+                </div>
+                <div className="md:col-span-2">
+                  <label className={labelCls}>Adresa stanovanja</label>
+                  <input type="text" value={form.address}
+                    onChange={e => setForm(f => ({...f, address: e.target.value}))}
+                    className={inputCls} placeholder="npr. Ulica 1, 10000 Zagreb" />
+                </div>
+              </div>
             </div>
 
-            <div className="mt-4">
-              <label className={labelCls}>Napomena</label>
+            {/* Lovački podaci */}
+            <div>
+              <h3 className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-3">Lovački podaci</h3>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                  <label className={labelCls}>LI broj — Lovačka iskaznica</label>
+                  <input type="text" value={form.li_broj}
+                    onChange={e => setForm(f => ({...f, li_broj: e.target.value}))}
+                    className={inputCls} placeholder="npr. 123456" />
+                </div>
+                <div>
+                  <label className={labelCls}>OL brojevi — Oružni listovi (zarezom)</label>
+                  <input type="text" value={form.ol_brojevi}
+                    onChange={e => setForm(f => ({...f, ol_brojevi: e.target.value}))}
+                    className={inputCls} placeholder="npr. OL-123, OL-456" />
+                </div>
+                <div>
+                  <label className={labelCls}>Član od</label>
+                  <input type="date" value={form.member_since}
+                    onChange={e => setForm(f => ({...f, member_since: e.target.value}))}
+                    className={inputCls} />
+                </div>
+                <div>
+                  <label className={labelCls}>Član do</label>
+                  <input type="date" value={form.member_until}
+                    onChange={e => setForm(f => ({...f, member_until: e.target.value}))}
+                    className={inputCls} />
+                </div>
+              </div>
+            </div>
+
+            {/* Napomena */}
+            <div>
+              <h3 className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-3">Napomena</h3>
               <textarea value={form.notes}
                 onChange={e => setForm(f => ({...f, notes: e.target.value}))}
                 className={inputCls} rows={3}
                 placeholder="Npr. počasni član od 2010., bivši predsjednik..." />
             </div>
 
-            <div className="mt-6 flex gap-3">
+            {/* Gumbi */}
+            <div className="flex gap-3 pt-2">
               <button onClick={saveProfile}
                 className="bg-forest-600 hover:bg-forest-700 text-white px-6 py-2.5 rounded-xl text-sm font-medium transition-colors">
                 Spremi podatke
               </button>
-              {isAdmin && view === 'form' && (
+              {isAdmin && (
                 <button onClick={() => { setView('list'); setSelectedMember(null) }}
                   className="border border-gray-200 hover:bg-gray-50 text-gray-700 px-6 py-2.5 rounded-xl text-sm font-medium transition-colors">
                   Odustani
